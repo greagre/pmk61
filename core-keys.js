@@ -1,5 +1,5 @@
 /* =========================================================
-   pmk61 / core-keys.js — слой ввода (ревизия 3)
+   pmk61 / core-keys.js — слой ввода (ревизия 3.1)
    Копия greagre/pmk52/core-keys.js — слой общий для обеих линий.
 
    Зачем отдельный файл:
@@ -18,12 +18,15 @@
    после записи числа в регистр набор ЗАВЕРШАЕТСЯ. Набрали 5,
    нажали X→П, R1 — на индикаторе 5, но набор закрыт,
    и следующая цифра 7 даёт 7, а не 57. Так у настоящего ПМК.
-   Показ числа на индикаторе при этом не меняется — сбрасывается
-   только состояние набора, а не значение X.
+   Показ числа при этом не меняется — сбрасывается только
+   состояние набора, а не значение X.
 
    Обращается к ядру только через его открытый API:
-   ST, exec, writeStep, writeJump, changed, hint, MAXDIG, fmt.
-   Никаких внутренних функций ядра здесь нет.
+   ST, exec, step, writeStep, writeJump, changed, hint, fmt,
+   MAXDIG, MAX_ADDR, PROG_LEN, REG_NAMES, ADDR_FIRST, addrShow.
+   Исключение — выбор регистра: событие 'pick-register' умеет
+   отправлять только сам ядро, поэтому там вызывается исходный
+   обработчик (keyNative).
 
    Подключение: после core.js и ДО скрипта, который вызывает
    MKCore.create() — слой подменяет key у создаваемых ядер.
@@ -141,7 +144,7 @@
       var cell = null;
       if (k.a === 'digit') cell = k.d;
       else if (k.a === 'dot') cell = 0x0A;
-      if (cell === null) return true;
+      if (cell === null) return;
 
       ST.prog[ST.ip] = cell;
       ST.ip = (ST.ip + 1) % core.PROG_LEN;
@@ -158,7 +161,6 @@
         core.hint('Адрес: ' + ST.addrBuf + '_ (вторая цифра)');
       }
       core.changed();
-      return true;
     }
 
     /* ---------- основная функция нажатия ---------- */
@@ -181,30 +183,23 @@
       }
 
       if (k.a === 'digit') {
-        if (ST.mode === 'PRG') writeCode(k.d, false);
-        else {
-          typeDigit(k.d);
-          ST.layer = 'main';
-          core.changed();
-        }
+        if (ST.mode === 'PRG') { writeCode(k.d, false); return; }
+        typeDigit(k.d);
+        ST.layer = 'main';
+        core.changed();
         return;
       }
 
       if (k.a === 'dot') {
-        if (ST.mode === 'PRG') writeCode(0x0A, false);
-        else {
-          typeDot();
-          ST.layer = 'main';
-          core.changed();
-        }
+        if (ST.mode === 'PRG') { writeCode(0x0A, false); return; }
+        typeDot();
+        ST.layer = 'main';
+        core.changed();
         return;
       }
 
       if (k.a === 'code') {
-        if (ST.mode === 'PRG') {
-          writeCode(k.c, !!k.jump);
-          return;
-        }
+        if (ST.mode === 'PRG') { writeCode(k.c, !!k.jump); return; }
         core.exec(k.c);
         /* x→П (прямая и косвенная) закрывает набор числа */
         if ((k.c & 0xF0) === 0x40 || (k.c & 0xF0) === 0xB0) endTyping();
@@ -213,10 +208,10 @@
         return;
       }
 
+      /* выбор регистра: событие 'pick-register' отправляет только ядро,
+         поэтому здесь работает исходный обработчик */
       if (k.a === 'stox' || k.a === 'loadx' || k.a === 'kcmd') {
-        ST.await = 'reg';
-        ST.kind = (k.a === 'stox') ? 0x40 : (k.a === 'loadx' ? 0x60 : k.k);
-        core.emitPickRegister ? core.emitPickRegister(k.a) : null;
+        if (core.keyNative) core.keyNative(k);
         return;
       }
 
@@ -233,7 +228,7 @@
         }
 
         if (mode === 'sto') {
-          /* вот он, долг: значение остаётся на индикаторе, но набор закрыт */
+          /* вот он, долг: число остаётся на индикаторе, но набор закрыт */
           ST.R[k.r] = MK.norm(ST.X, MAXDIG);
           endTyping();
           core.hint('X → R' + core.REG_NAMES[k.r] + ' = ' + core.fmt(ST.X));
@@ -248,36 +243,29 @@
       }
 
       if (k.a === 'sp') {
-        if (ST.mode === 'PRG') writeCode(0x50, false);
-        else if (ST.run) {
+        if (ST.mode === 'PRG') { writeCode(0x50, false); return; }
+        if (ST.run) {
           ST.run = false;
           core.hint('Остановлено клавишей С/П на адресе ' + core.addrShow(ST.ip));
-          ST.layer = 'main';
-          core.changed();
         } else {
           ST.run = true;
-          ST.layer = 'main';
-          core.changed();
         }
+        ST.layer = 'main';
+        core.changed();
         return;
       }
 
       if (k.a === 'pp') {
-        if (ST.mode === 'PRG') writeCode(0x53, true);
-        else {
-          ST.run = false;
-          core.step();
-          ST.layer = 'main';
-          core.changed();
-        }
+        if (ST.mode === 'PRG') { writeCode(0x53, true); return; }
+        ST.run = false;
+        core.step();
+        ST.layer = 'main';
+        core.changed();
         return;
       }
 
       if (k.a === 'bp') {
-        if (ST.mode === 'PRG') {
-          writeCode(0x51, true);
-          return;
-        }
+        if (ST.mode === 'PRG') { writeCode(0x51, true); return; }
         ST.await = 'addr';
         ST.addrBuf = '';
         core.hint('Введи адрес перехода двумя цифрами');
@@ -287,14 +275,12 @@
       }
 
       if (k.a === 'vo') {
-        if (ST.mode === 'PRG') writeCode(0x52, false);
-        else {
-          ST.ip = 0;
-          ST.sub = [];
-          core.hint('Адрес 00');
-          ST.layer = 'main';
-          core.changed();
-        }
+        if (ST.mode === 'PRG') { writeCode(0x52, false); return; }
+        ST.ip = 0;
+        ST.sub = [];
+        core.hint('Адрес 00');
+        ST.layer = 'main';
+        core.changed();
         return;
       }
 
@@ -326,18 +312,16 @@
       }
 
       if (k.a === 'layer-cmd') {
-        if (ST.mode === 'PRG') writeCode(k.c, !!k.jump);
-        else {
-          core.exec(k.c);
-          if ((k.c & 0xF0) === 0x40 || (k.c & 0xF0) === 0xB0) endTyping();
-          ST.layer = 'main';
-          core.changed();
-        }
+        if (ST.mode === 'PRG') { writeCode(k.c, !!k.jump); return; }
+        core.exec(k.c);
+        if ((k.c & 0xF0) === 0x40 || (k.c & 0xF0) === 0xB0) endTyping();
+        ST.layer = 'main';
+        core.changed();
         return;
       }
     }
 
-    /* дополнительные команды, которых нет в ядре, но которые нужны слою */
+    /* вспомогательные вещи, полезные интерфейсу */
     core.negateX = negate;
     core.endTyping = endTyping;
     return key;
@@ -345,7 +329,7 @@
 
   MK.create = function (opt) {
     var core = origCreate(opt);
-    core.keyNative = core.key;   /* исходный обработчик ядра — только для сравнения */
+    core.keyNative = core.key;   /* исходный обработчик ядра — для делегирования */
     core.key = makeKey(core);
     return core;
   };
