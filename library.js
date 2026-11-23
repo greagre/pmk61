@@ -1,18 +1,28 @@
 /* =========================================================
-   pmk61 / library.js — библиотека программ (ревизия 1)
+   pmk61 / library.js — библиотека программ (ревизия 2)
 
    Что делает:
    - сохраняет текущую программу ВМЕСТЕ с регистрами, X и углом;
-   - список сохранённых, кнопка ▶ возвращает и программу, и регистры
-     (как в 34-м проекте — там это оказалось главным);
+   - список сохранённых, кнопка ▶ возвращает и программу, и регистры;
    - выгружает TXT в договорённом формате: «Перед пуском», затем шаги
      «адрес · десятичный код · подпись команды», плюс строки кодов;
    - выгружает и принимает JSON;
    - принимает TXT обратно: строки «адрес  код  подпись» или «Коды (hex):».
 
    «Перед пуском» показывает ТОЛЬКО входные регистры — те, которые
-   программа читает раньше, чем записывает. Это правило взято из 34-го
-   проекта: рабочие регистры в инструкции только путают.
+   программа читает раньше, чем записывает. Правило взято из 34-го проекта.
+
+   Ревизия 2 (закрыты два долга контрольных тестов):
+   - коды 0x4F и 0x6F адресуют R0, а не «R15»: младшая цифра F
+     нормализуется ДО сверки с числом регистров профиля. Раньше запись
+     в written[15] молча выбрасывалась циклом до REG_COUNT, и программа
+     с 4F/6F считалась «без входных регистров» независимо от кода;
+   - X возвращается при импорте TXT: строка «Результат на момент
+     сохранения: X = …» теперь пишется всегда, когда X известно
+     (и при X = 0 тоже), и разбирается обратно;
+   - числа разбираются с учётом формата индикатора: «1.2345678 05»
+     читается как 1.2345678·10^5, а не как 1.234567805. Это касается
+     и X, и строки «Регистры при сохранении».
 
    Ядро (core.js) и слой ввода (core-keys.js) не трогаются.
    Подключение: после core-keys.js и ДО скрипта, который вызывает
@@ -57,11 +67,37 @@
 
   function core() { return global.PMK61_CORE || null; }
 
+  /* ---------- разбор чисел индикатора ----------
+     Ядро печатает большие и малые числа как на ПМК: мантисса, пробел,
+     знак порядка (или пробел) и две цифры порядка. Поэтому «1.5 09»
+     означает 1.5·10^9, а «-1.5-09» — −1.5·10^−9.
+     Наивный parseFloat после удаления пробелов дал бы 1.509 — неверно. */
+  function numFromText(s) {
+    var t = String(s == null ? '' : s).trim().replace(',', '.');
+    if (!t) return NaN;
+    var m = t.match(/^(-?\d+(?:\.\d+)?)\s+([-+]?\d{1,2})$/);
+    if (m) {
+      var mant = parseFloat(m[1]);
+      var exp = parseInt(m[2], 10);
+      if (isFinite(mant) && isFinite(exp)) return mant * Math.pow(10, exp);
+    }
+    return parseFloat(t.replace(/\s+/g, ''));
+  }
+
   /* ---------- что считаем входным регистром ----------
      Идём по всей памяти программ и следим за двумя множествами:
      «уже записан» и «уже прочитан до записи». Регистр, который
      прочитан раньше первой записи, — входной. Циклы L0–L3 читают
-     и тут же меняют свой регистр, поэтому он тоже входной. */
+     и тут же меняют свой регистр, поэтому он тоже входной.
+
+     Младшая цифра F (15) по таблице кодов означает R0 — нормализуем
+     её до любых сравнений с числом регистров профиля. */
+  var REG_F = 15;
+
+  function normReg(lo) {
+    return lo === REG_F ? 0 : lo;
+  }
+
   function loopReg(code) {
     if (code === 0x5D) return 0;
     if (code === 0x5B) return 1;
@@ -72,15 +108,17 @@
 
   function inputRegisters(c) {
     var prog = c.getProgram();
-    var written = {}, inputs = {}, i, code, hi, lo, r;
+    var written = {}, inputs = {}, i, code, hi, r;
     for (i = 0; i < prog.length; i++) {
       code = prog[i];
       hi = code & 0xF0;
-      lo = code & 0x0F;
+      r = normReg(code & 0x0F);
+      if (r >= c.REG_COUNT) r = -1;
+
       if (hi === 0x40 || hi === 0xB0) {        /* x→П, K x→П — запись */
-        written[lo] = 1;
+        if (r >= 0) written[r] = 1;
       } else if (hi === 0x60) {               /* П→x — чтение */
-        if (!written[lo]) inputs[lo] = 1;
+        if (r >= 0 && !written[r]) inputs[r] = 1;
       } else if (loopReg(code) >= 0) {        /* F L0…L3 — счётчик */
         r = loopReg(code);
         if (!written[r]) inputs[r] = 1;
@@ -129,7 +167,8 @@
     lines.push('МК-61 · ' + (item && item.name ? item.name : 'без названия'));
     lines.push('Сохранено: ' + stamp(item && item.savedAt));
     lines.push(regsLine(c, true));
-    if (item && typeof item.x === 'number' && item.x !== 0) {
+    /* X пишем всегда, когда он известен: ноль — тоже результат */
+    if (item && typeof item.x === 'number') {
       lines.push('Результат на момент сохранения: X = ' + c.fmt(item.x));
     }
     lines.push('Угол: ' + c.angleName(item && item.angle ? item.angle : c.getAngle()));
@@ -170,6 +209,7 @@
   function fromText(text, c) {
     var prog = new Array(c.PROG_LEN).fill(c.NOP);
     var regs = null;
+    var xval;
     var name = null;
     var lines = String(text).split(/\r?\n/);
     var i, m;
@@ -179,6 +219,14 @@
 
       if (!name && /^МК-61\s*·/.test(line)) {
         name = line.replace(/^МК-61\s*·\s*/, '').trim();
+      }
+
+      /* результат на момент сохранения — только X, остальное в снимке */
+      m = line.match(/^Результат на момент сохранения:\s*X\s*=\s*(.+)$/i);
+      if (m) {
+        var xv = numFromText(m[1]);
+        if (isFinite(xv)) xval = xv;
+        continue;
       }
 
       /* строка со всеми кодами в hex */
@@ -212,22 +260,22 @@
         continue;
       }
 
-      /* строки регистров */
-      m = line.match(/^\s*R(\w)=(-?[\d.,eE+\- ]+)/g);
+      /* строки регистров: R0=7  R1=0  …  и «R0 = 7» тоже */
+      m = line.match(/R(\w)\s*=\s*([^\sR]+(?:\s*[-+]?\d{1,2})?)/g);
       if (m) {
         regs = regs || {};
         for (var z = 0; z < m.length; z++) {
-          var rm = m[z].match(/^\s*R(\w)=(.+)$/);
+          var rm = m[z].match(/^R(\w)\s*=\s*(.+)$/);
           if (!rm) continue;
           var idx = c.REG_NAMES.indexOf(rm[1]);
-          var num = parseFloat(String(rm[2]).replace(/\s+/g, '').replace(',', '.'));
+          var num = numFromText(rm[2]);
           if (idx >= 0 && isFinite(num)) regs[idx] = num;
         }
       }
     }
 
     if (!prog.some(function (x) { return x !== c.NOP; })) return null;
-    return { name: name || 'Импорт ' + stamp(), prog: prog, regs: regs };
+    return { name: name || 'Импорт ' + stamp(), prog: prog, regs: regs, x: xval };
   }
 
   /* ---------- действия ---------- */
@@ -514,13 +562,14 @@
   }
 
   global.PMK61Lib = {
-    version: 1,
+    version: 2,
     toText: toText,
     fromText: fromText,
     applyItem: applyItem,
     snapshotCurrent: snapshotCurrent,
     inputRegisters: inputRegisters,
     listingRows: listingRows,
-    loadAll: loadAll
+    loadAll: loadAll,
+    numFromText: numFromText
   };
 })(typeof window !== 'undefined' ? window : this);
