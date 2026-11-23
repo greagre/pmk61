@@ -31,12 +31,22 @@
   .hex { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: nowrap; }
   .note { margin-top: 16px; color: #5b6570; font-size: 12px; }
   .err { color: var(--bad); font-weight: 600; }
+  .hintbox { background:#eef4ff; border:1px solid #c4d6f5; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
+  .warn { background:#fff3cd; border:1px solid #e0c068; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
 </style>
 </head>
 <body>
 
 <h1>pmk61 — контрольные тесты</h1>
 <div class="sub">Ядро <span class="hex">core.js</span> + профили <span class="hex">profiles.js</span>. Ожидания вписаны по таблице кодов, а не по «здравому смыслу»: красная строка означает расхождение ядра с таблицей.</div>
+
+<div id="stale"></div>
+
+<div class="hintbox">
+  <b>Как записывается адрес перехода.</b> Первая ячейка после команды — десятки, вторая — единицы.
+  Адрес 4 пишется <span class="hex">00 04</span>, а запись <span class="hex">04 00</span> — это адрес 40.
+  Адреса 100…104: первая ячейка <span class="hex">0A</span> («•»), вторая — цифра 0…4, то есть «-0»…«-4».
+</div>
 
 <button id="go">Прогнать все</button>
 <div id="summary">—</div>
@@ -52,8 +62,8 @@
   Если таблица не заполнилась — проверь, что рядом лежат <span class="hex">core.js</span> и <span class="hex">profiles.js</span>.
 </div>
 
-<script src="core.js?v=6"></script>
-<script src="profiles.js?v=6"></script>
+<script src="core.js?v=8"></script>
+<script src="profiles.js?v=8"></script>
 <script>
 (function () {
   'use strict';
@@ -63,7 +73,8 @@
   /* Программы записаны hex-кодами.
      0x0E — В↑ (иначе две цифры подряд дают одно число),
      0x50 — С/П (останов),
-     0x0A — «•» (в адресе — первая ячейка адресов 100…104). */
+     0x0A — «•» (в адресе — первая ячейка адресов 100…104).
+     Адрес перехода: сначала десятки, потом единицы. */
 
   var CASES = [
     { name: 'Сложение 2 + 3',             prog: [0x02, 0x0E, 0x03, 0x10, 0x50], expect: 5 },
@@ -81,30 +92,41 @@
     { name: 'Стоп по С/П',                prog: [0x05, 0x50], expect: 5 },
 
     /* ---- Переходы и подпрограммы ---- */
-    { name: 'БП вперёд занимает три ячейки', prog: [0x51, 0x04, 0x00, 0x09, 0x07, 0x50], expect: 7 },
-    { name: 'ПП → В/О: возврат на ip + 3',   prog: [0x07, 0x53, 0x05, 0x00, 0x50, 0x52], expect: 7 },
-    { name: 'Два вложенных ПП',              prog: [0x07, 0x53, 0x05, 0x00, 0x50, 0x53, 0x09, 0x00, 0x52, 0x52], expect: 7 },
+    { name: 'БП вперёд занимает три ячейки', prog: [0x51, 0x00, 0x04, 0x09, 0x07, 0x50], expect: 7 },
+    { name: 'ПП → В/О: возврат на ip + 3',   prog: [0x07, 0x53, 0x00, 0x05, 0x50, 0x52], expect: 7 },
+    { name: 'Два вложенных ПП',              prog: [0x07, 0x53, 0x00, 0x05, 0x50, 0x53, 0x00, 0x08, 0x52, 0x52], expect: 7 },
     { name: 'Шестой вложенный ПП — ЕГГОГ',   prog: [0x53, 0x00, 0x00], expectError: true },
-    { name: 'F L0: пять итераций назад',     prog: [0x05, 0x40, 0x0D, 0x01, 0x10, 0x5D, 0x03, 0x00, 0x50], expect: 5 },
+    { name: 'F L0: пять итераций назад',     prog: [0x05, 0x40, 0x0D, 0x01, 0x10, 0x5D, 0x00, 0x03, 0x50], expect: 5 },
     { name: 'К БП: модификация адреса в R1', prog: [0x05, 0x41, 0x81, 0x09, 0x07, 0x50], expect: 7 },
     { name: 'К ПП: возврат из косвенного',   prog: [0x05, 0x41, 0xA1, 0x50, 0x52], expect: 5 },
-    { name: 'F x≥0 при X = 0: истина',       prog: [0x0D, 0x59, 0x05, 0x00, 0x50, 0x07, 0x50], expect: 0 },
-    { name: 'F x<0 при X = 0: ложь',         prog: [0x0D, 0x5C, 0x05, 0x00, 0x50, 0x07, 0x50], expect: 7 }
+    { name: 'F x≥0 при X = 0: истина',       prog: [0x0D, 0x59, 0x00, 0x05, 0x50, 0x07, 0x50], expect: 0 },
+    { name: 'F x<0 при X = 0: ложь',         prog: [0x0D, 0x5C, 0x00, 0x05, 0x50, 0x07, 0x50], expect: 7 }
   ];
 
   /* Отдельные проверки, которым нужен не прогон, а прямой вызов API. */
   var EXTRA = [
     {
-      name: 'Адрес 100 → «-0»',
+      name: 'Ядро: адрес 100 → «-0»',
       prog: '—',
+      want: '«-0»',
       run: function () {
         var got = MKProfiles.formatAddr(100, MODEL);
         return { ok: got === '-0', fact: got };
       }
     },
     {
+      name: 'Ядро: адрес 104 → «-4»',
+      prog: '—',
+      want: '«-4»',
+      run: function () {
+        var got = MKProfiles.formatAddr(104, MODEL);
+        return { ok: got === '-4', fact: got };
+      }
+    },
+    {
       name: 'Разбор «-4»',
       prog: '—',
+      want: '104',
       run: function () {
         var got = MKProfiles.parseAddr('-4', MODEL);
         return { ok: got === 104, fact: String(got) };
@@ -113,6 +135,7 @@
     {
       name: 'Ядро читает адрес -4 (0x51 0A 04)',
       prog: [0x51, 0x0A, 0x04],
+      want: '104',
       run: function () {
         var ct = MKCore.create(MKProfiles.get(MODEL));
         ct.setProgram([0x51, 0x0A, 0x04]);
@@ -123,6 +146,7 @@
     {
       name: 'БП: адрес 12 из двух ячеек',
       prog: [0x51, 0x01, 0x02],
+      want: '12',
       run: function () {
         var ct = MKCore.create(MKProfiles.get(MODEL));
         ct.setProgram([0x51, 0x01, 0x02]);
@@ -131,8 +155,31 @@
       }
     },
     {
+      name: 'Порядок ячеек: 04 00 — адрес 40',
+      prog: [0x51, 0x04, 0x00],
+      want: '40',
+      run: function () {
+        var ct = MKCore.create(MKProfiles.get(MODEL));
+        ct.setProgram([0x51, 0x04, 0x00]);
+        var got = ct.jumpAddr(0);
+        return { ok: got === 40, fact: String(got) };
+      }
+    },
+    {
+      name: 'Порядок ячеек: 00 04 — адрес 4',
+      prog: [0x51, 0x00, 0x04],
+      want: '4',
+      run: function () {
+        var ct = MKCore.create(MKProfiles.get(MODEL));
+        ct.setProgram([0x51, 0x00, 0x04]);
+        var got = ct.jumpAddr(0);
+        return { ok: got === 4, fact: String(got) };
+      }
+    },
+    {
       name: 'Подпись 4F — «x→П 0»',
       prog: '—',
+      want: '«x→П 0»',
       run: function () {
         var got = MKCore.cmdName(0x4F, 15);
         return { ok: got === 'x→П 0', fact: got };
@@ -150,6 +197,22 @@
     return String(p || '—');
   }
 
+  /* Защита от старой копии файлов из кэша. */
+  function checkFresh() {
+    var el = document.getElementById('stale');
+    el.innerHTML = '';
+    if (typeof MKCore === 'undefined' || typeof MKProfiles === 'undefined') return;
+    var bad = [];
+    var p = MKProfiles.get(MODEL);
+    if (p && p.progLen !== 105) bad.push('progLen у mk-61 = ' + p.progLen + ', ожидалось 105');
+    if (MKProfiles.formatAddr(104, MODEL) !== '-4') bad.push('formatAddr(104) = "' + MKProfiles.formatAddr(104, MODEL) + '", ожидалось "-4"');
+    if (MKProfiles.parseAddr('-4', MODEL) !== 104) bad.push('parseAddr("-4") = ' + MKProfiles.parseAddr('-4', MODEL) + ', ожидалось 104');
+    if (bad.length) {
+      el.innerHTML = '<div class="warn"><b>Загружена старая копия файлов.</b><br>' + bad.join('<br>') +
+        '<br>Обнови страницу с очисткой кэша.</div>';
+    }
+  }
+
   function runProgramCase(c) {
     var profile = MKProfiles.get(MODEL);
     if (!profile) return { ok: false, fact: 'нет профиля ' + MODEL };
@@ -165,7 +228,7 @@
     var st = ct.ST;
 
     if (c.expectError) {
-      return { ok: st.err === true, fact: st.err ? 'ЕГГОГ' : ('X = ' + MKCore.fmtNum(st.X)) };
+      return { ok: st.err === true, fact: st.err ? 'ЕГГОГ' : ('X = ' + MKCore.fmtNum(st.X) + ' (' + res.steps + ' шагов)') };
     }
     if (st.err) return { ok: false, fact: 'ЕГГОГ' };
 
@@ -202,6 +265,8 @@
         'Ядро не загрузилось: нет core.js или profiles.js рядом с этой страницей';
       return;
     }
+
+    checkFresh();
 
     CASES.forEach(function (c) {
       var r;
