@@ -92,6 +92,7 @@
 
   <div class="foot">
     Порядок ввода как у ПМК: <b>X→П</b>, затем регистр — как вторая клавиша.<br>
+    <b>Сброс</b> гасит регистры и программу; сохранённые в библиотеке остаются.<br>
     <a href="tests.html">контрольные тесты</a>
   </div>
 </div>
@@ -99,7 +100,7 @@
 <script src="profiles.js?v=12"></script>
 <script src="core.js?v=12"></script>
 <!-- слой ввода: правки клавиатуры идут в core-keys.js, ядро core.js не трогаем -->
-<script src="core-keys.js?v=2"></script>
+<script src="core-keys.js?v=4"></script>
 <script>
 (function () {
   'use strict';
@@ -112,7 +113,7 @@
   var hintText = '';
 
   /* ---------- описание клавиатуры ---------- */
-  /* key — то, что уходит в core.key(); cls — оформление */
+  /* key — то, что уходит в core.key(); cls — оформление; act — действие интерфейса */
   var KEYS = [
     { sec: 'Управление' },
     { t: 'F', key: { a: 'pref-f' }, cls: 'fn' },
@@ -123,6 +124,10 @@
     { t: '↔', key: { a: 'code', c: 0x14 }, cls: 'fn', sub: 'X и Y' },
     { t: 'ПРГ', key: { a: 'prg' }, cls: 'fn' },
     { t: 'АВТ', key: { a: 'aut' }, cls: 'fn' },
+
+    { sec: 'Сервис' },
+    { t: 'Сброс', act: 'reset', cls: 'acc wide', sub: 'регистры и программа' },
+    { t: 'CF', key: { a: 'cf' }, cls: 'fn wide', sub: 'снять слой F или K' },
 
     { sec: 'Числа' },
     { t: '7', key: { a: 'digit', d: 7 } },
@@ -223,8 +228,10 @@
       var b = e.target.closest('.k');
       if (!b) return;
       var item = KEYS[+b.dataset.i];
-      if (!item || !item.key) return;
+      if (!item) return;
       hintText = '';
+      if (item.act === 'reset') { core.resetAll(); render(); return; }
+      if (!item.key) return;
       core.key(item.key);
       render();
     });
