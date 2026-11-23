@@ -7,17 +7,29 @@
    и одинаково в обоих проектах. Всё, что различает модели, живёт
    в profiles.js, а не здесь.
 
+   Изменения ревизии 2 (только линия МК-61, линию Б3-34 не затрагивают):
+   - cmdName учитывает пятнадцатый регистр (4E / 6E = Re) и не выдумывает
+     подпись для кода за пределами профиля;
+   - jumpAddr понимает адреса 100…104, записанные как «A0…A4»
+     (вторая ячейка адреса содержит 0x0A), если профиль это разрешает;
+   - modAddr считает модификацию по длине адресного пространства профиля
+     (105 у МК-61), а не по модулю 100; у профилей без addrHigh остаётся
+     прежнее поведение.
+
    Правила этого файла:
    - ничего не знает про DOM, CSS, звук и вёрстку;
    - состояние — обычные данные, годится для JSON;
    - наружу отдаёт только состояния и события через onEvent.
 
    Профиль передаётся в create():
-     progLen   — шагов программной памяти (105 у МК-61)
-     regCount  — число регистров (15 у МК-61)
-     regNames  — подписи регистров (['0'..'9','a'..'e'])
-     nop       — код пустого шага (0x54 «К НОП»)
-     maxDig    — значащих цифр мантиссы (8)
+     progLen      — шагов программной памяти (105 у МК-61)
+     regCount     — число регистров (15 у МК-61)
+     regNames     — подписи регистров (['0'..'9','a'..'e'])
+     nop          — код пустого шага (0x54 «К НОП»)
+     maxDig       — значащих цифр мантиссы (8)
+     addrHigh     — разрешены ли адреса выше 99
+     addrHighFirst — первый такой адрес (100)
+     addrHighLast  — последний такой адрес (104)
 
    Угол (переключатель Р-ГРД-Г на корпусе):
      'deg'  — градусы (по умолчанию, как у оригинала при включении)
@@ -49,6 +61,15 @@
     0x5B: 'F L1', 0x5C: 'F x<0', 0x5D: 'F L0', 0x5E: 'F x=0'
   };
 
+  /* Подписи для диапазонов с номером регистра в младшей цифре.
+     Названия совпадают с таблицей profiles.js, чтобы листинг,
+     декодер и подсказки говорили одинаково. */
+  var RANGE_NAMES = {
+    0x40: 'x→П', 0x60: 'П→x',
+    0x70: 'K x≠0', 0x80: 'K БП', 0x90: 'K x≥0', 0xA0: 'K ПП',
+    0xB0: 'K x→П', 0xC0: 'K x<0', 0xD0: 'K П→x', 0xE0: 'K x=0'
+  };
+
   function codeStr(c) {
     c = c & 255;
     return CODE_CHARS[(c >> 4) & 15] + CODE_CHARS[c & 15];
@@ -59,19 +80,18 @@
     return s.length < 2 ? '0' + s : s;
   }
 
-  function cmdName(c) {
+  /* regCount необязателен: без него считаем, что регистры есть до Re.
+     Для линии Б3-34 интерфейс передаёт 14 — тогда 4E/6E подписи не получат. */
+  function cmdName(c, regCount) {
     if (c >= 0 && c <= 9) return String(c);
     if (CMD_NAMES[c]) return CMD_NAMES[c];
-    if (c >= 0x40 && c <= 0x4D) return 'X→П ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0x60 && c <= 0x6D) return 'П→X ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0x70 && c <= 0x7D) return 'К x≠0 ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0x80 && c <= 0x8D) return 'К БП ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0x90 && c <= 0x9D) return 'К x≥0 ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0xA0 && c <= 0xAD) return 'К ПП ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0xB0 && c <= 0xBD) return 'К X→П ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0xC0 && c <= 0xCD) return 'К x<0 ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0xD0 && c <= 0xDD) return 'К П→X ' + DEF_REG_NAMES[c & 15];
-    if (c >= 0xE0 && c <= 0xED) return 'К x=0 ' + DEF_REG_NAMES[c & 15];
+    var hi = c & 0xF0, lo = c & 0x0F;
+    var nm = RANGE_NAMES[hi];
+    if (nm) {
+      if (lo === 0x0F) return nm + ' 0';              /* F — алиас R0 */
+      if (regCount && lo >= regCount) return '?';     /* такого регистра нет */
+      return nm + ' ' + DEF_REG_NAMES[lo];
+    }
     return '?';
   }
 
@@ -144,6 +164,15 @@
     var REG_NAMES = regNames;
     /* наибольший допустимый адрес перехода: последний шаг программы */
     var MAX_ADDR = PROG_LEN - 1;
+
+    /* адреса выше 99 (у МК-61 это 100…104, на бумаге «A0»…«A4») */
+    var ADDR_HIGH = !!opt.addrHigh;
+    var ADDR_FIRST = typeof opt.addrHighFirst === 'number' ? opt.addrHighFirst : 100;
+    var ADDR_LAST = typeof opt.addrHighLast === 'number' ? opt.addrHighLast : MAX_ADDR;
+    if (ADDR_LAST > MAX_ADDR) ADDR_LAST = MAX_ADDR;
+    /* длина адресного пространства для модификации адреса:
+       у Б3-34 прежнее поведение (100), у МК-61 — 105 */
+    var ADDR_SPAN = ADDR_HIGH ? PROG_LEN : 100;
 
     var ST = {
       X: 0, Y: 0, Z: 0, T: 0, X1: 0,
@@ -363,11 +392,20 @@
     }
 
     /* ---------- адреса ---------- */
+    /* Адрес занимает две ячейки после команды.
+       Обычный адрес: десятки (0…9) и единицы (0…9).
+       Адрес 100…104 у МК-61: десятки 0…4 и вторая ячейка 0x0A («A»). */
     function jumpAddr(ip) {
       var at = (ip === undefined ? ST.ip : ip);
       var a = ST.prog[(at + 1) % PROG_LEN];
       var b = ST.prog[(at + 2) % PROG_LEN];
-      if (a > 9 || b > 9) return -1;
+      if (a > 9) return -1;
+      if (b > 9) {
+        if (!ADDR_HIGH || b !== 0x0A) return -1;
+        var high = ADDR_FIRST + a;
+        if (high > ADDR_LAST) return -1;
+        return high;
+      }
       var v = a * 10 + b;
       if (v < 0 || v > MAX_ADDR) return -1;
       return v;
@@ -375,16 +413,24 @@
 
     function modAddr(v, r) {
       var a;
-      if (r >= 0 && r <= 3) a = (v - 1 + 100) % 100;
-      else if (r >= 4 && r <= 6) a = (v + 1) % 100;
+      if (r >= 0 && r <= 3) a = (v - 1 + ADDR_SPAN) % ADDR_SPAN;
+      else if (r >= 4 && r <= 6) a = (v + 1) % ADDR_SPAN;
       else a = v;
       if (a < 0 || a > MAX_ADDR) a = ((a % PROG_LEN) + PROG_LEN) % PROG_LEN;
       return a;
     }
 
+    function addrLimitText() {
+      var txt = '00–' + (MAX_ADDR < 10 ? '0' + MAX_ADDR : Math.min(MAX_ADDR, 99));
+      if (ADDR_HIGH && ADDR_LAST >= ADDR_FIRST) {
+        txt += ' или A0–A' + (ADDR_LAST - ADDR_FIRST) + ' (шаги ' + ADDR_FIRST + '–' + ADDR_LAST + ')';
+      }
+      return txt;
+    }
+
     function badAddress() {
-      hint('Ошибка в адресе перехода: после команды должны стоять две цифры (00–' +
-           (MAX_ADDR < 10 ? '0' + MAX_ADDR : MAX_ADDR) + ')');
+      hint('Ошибка в адресе перехода: после команды должны стоять две цифры адреса (' +
+           addrLimitText() + ')');
       ST.err = true;
       ST.run = false;
       emit('error', null);
@@ -580,7 +626,8 @@
     function key(k) {
       if (!k) return;
 
-      /* ввод адреса перехода: каждая цифра — отдельная ячейка программы */
+      /* ввод адреса перехода: каждая цифра — отдельная ячейка программы.
+         Адреса A0…A4 с клавиатуры не вводятся: только через интерфейс/импорт. */
       if (ST.await === 'addr' && k.a === 'digit') {
         ST.prog[ST.ip] = k.d;
         ST.ip = (ST.ip + 1) % PROG_LEN;
@@ -755,8 +802,10 @@
       clearLog: clearLog,
       record: record,
       fmt: function (v) { return fmtNum(v, MAXDIG); },
-      cmdName: cmdName,
+      /* подписи команд — с учётом числа регистров этого профиля */
+      cmdName: function (c) { return cmdName(c, REG_COUNT); },
       jumpAddr: jumpAddr,
+      modAddr: modAddr,
       changed: changed,
       hint: hint,
       /* размеры памяти этого экземпляра — пригодятся интерфейсу и декодеру */
@@ -765,7 +814,10 @@
       MAX_ADDR: MAX_ADDR,
       REG_NAMES: REG_NAMES.slice(0),
       MAXDIG: MAXDIG,
-      NOP: NOP
+      NOP: NOP,
+      ADDR_HIGH: ADDR_HIGH,
+      ADDR_FIRST: ADDR_FIRST,
+      ADDR_LAST: ADDR_LAST
     };
   }
 
