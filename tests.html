@@ -5,198 +5,204 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pmk61 — контрольные тесты</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-         margin: 0; padding: 16px 14px 40px; background: #f6f6f4; color: #1c1c1c; }
-  @media (prefers-color-scheme: dark) { body { background: #16181a; color: #e8e8e8; } }
+  :root { --ok:#1a7f37; --bad:#c62828; --line:#d5d8dc; --bg:#f6f7f9; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 14px 40px;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px; color: #1b1f23; background: var(--bg); line-height: 1.45;
+  }
   h1 { font-size: 19px; margin: 0 0 4px; }
-  .sub { color: #6b6b6b; font-size: 13px; margin-bottom: 16px; }
-  @media (prefers-color-scheme: dark) { .sub { color: #9a9a9a; } }
-  button { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 10px;
-           border: 1px solid #2c6bed; background: #2c6bed; color: #fff; cursor: pointer; }
-  button:active { transform: translateY(1px); }
-  .sum { margin: 14px 0; font-weight: 600; }
-  .sum.ok { color: #1a7f4b; }
-  .sum.bad { color: #c0272d; }
-  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
-  caption { text-align: left; font-weight: 600; padding: 6px 0; }
-  th, td { border: 1px solid #d8d8d4; padding: 6px 8px; text-align: left; vertical-align: top; }
-  @media (prefers-color-scheme: dark) { th, td { border-color: #33373b; } }
-  th { background: #eceae4; font-weight: 600; }
-  @media (prefers-color-scheme: dark) { th { background: #212528; } }
-  tr.pass td.mark { color: #1a7f4b; font-weight: 700; }
-  tr.fail td.mark { color: #c0272d; font-weight: 700; }
-  tr.fail { background: #fff2f2; }
-  @media (prefers-color-scheme: dark) { tr.fail { background: #2a1a1a; } }
-  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
-  .note { margin-top: 22px; font-size: 13px; color: #6b6b6b; }
-  @media (prefers-color-scheme: dark) { .note { color: #9a9a9a; } }
-  .note h2 { font-size: 14px; margin: 16px 0 6px; }
+  .sub { color: #5b6570; font-size: 13px; margin-bottom: 14px; }
+  button {
+    font: inherit; font-weight: 600; padding: 11px 18px; border: 0;
+    border-radius: 10px; background: #2563eb; color: #fff; cursor: pointer;
+  }
+  button:active { background: #1d4ed8; }
+  #summary { margin: 14px 0 10px; font-weight: 700; font-size: 16px; }
+  .pass { color: var(--ok); }
+  .fail { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 7px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef0f3; font-size: 12px; text-transform: none; }
+  td.mark { width: 26px; text-align: center; font-weight: 700; }
+  td.mark.ok { color: var(--ok); }
+  td.mark.bad { color: var(--bad); }
+  .hex { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: nowrap; }
+  .note { margin-top: 16px; color: #5b6570; font-size: 12px; }
+  .err { color: var(--bad); font-weight: 600; }
 </style>
 </head>
 <body>
 
 <h1>pmk61 — контрольные тесты</h1>
-<div class="sub">Ядро <code>core.js</code>, профили <code>profiles.js</code>. Проверяются команды и пределы модели, а не интерфейс.</div>
+<div class="sub">Ядро <span class="hex">core.js</span> + профили <span class="hex">profiles.js</span>. Ожидания вписаны по таблице кодов, а не по «здравому смыслу»: красная строка означает расхождение ядра с таблицей.</div>
 
-<button id="run">Прогнать все</button>
-<div class="sum" id="sum">Нажми «Прогнать все»</div>
-<div id="out"></div>
+<button id="go">Прогнать все</button>
+<div id="summary">—</div>
+<table id="out">
+  <thead>
+    <tr><th></th><th>Кейс</th><th>Программа</th><th>Ожидание</th><th>Факт</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
 
 <div class="note">
-  <h2>Как читать результат</h2>
-  <p><strong>Красный кейс</strong> — расхождение ядра с таблицей кодов, а не поломка страницы: в колонке «Факт» видно, что получилось на самом деле.</p>
-  <p>Числа сравниваются с допуском 1e-9: 0,7 из 3,7 в двоичной арифметике отличается в последнем разряде.</p>
-  <h2>Почему в программах стоит «0E»</h2>
-  <p>На ПМК цифры подряд набирают одно число: <code>02 03</code> — это двадцать три, а не два и три. Чтобы получить два числа в стеке, между ними нужен <code>0E</code> (В↑). Прежние кейсы «2 + 3» без него были составлены неверно.</p>
-  <p>Каждая программа заканчивается <code>50</code> (С/П) — иначе прогон упрётся в лимит шагов и результат будет помечен как незавершённый, хотя X уже правильный.</p>
+  Прогон выполняется в браузере, ничего никуда не отправляется.
+  Если таблица не заполнилась — проверь, что рядом лежат <span class="hex">core.js</span> и <span class="hex">profiles.js</span>.
 </div>
 
 <script src="core.js"></script>
 <script src="profiles.js"></script>
 <script>
 (function () {
-  "use strict";
+  'use strict';
 
-  var EPS = 1e-9;
+  var MODEL = 'mk-61';
 
-  function profileByName(name) {
-    if (window.MKProfiles) {
-      if (typeof MKProfiles.get === "function") {
-        try { var p = MKProfiles.get(name); if (p) return p; } catch (e) {}
-      }
-      if (MKProfiles.PROFILES && MKProfiles.PROFILES[name]) return MKProfiles.PROFILES[name];
-    }
-    return { id: name };
-  }
+  /* Программы записаны hex-кодами.
+     0x0E — В↑ (иначе две цифры подряд дают одно число),
+     0x50 — С/П (останов),
+     0x0A — «•» (в адресе — первая ячейка адресов 100…104). */
 
-  function makeCore(modelName) {
-    if (!window.MKCore || typeof MKCore.create !== "function") return null;
-    return MKCore.create(profileByName(modelName));
-  }
-
-  /* В ядре нет метода get(): состояние живёт в ct.ST. */
-  function readState(ct) {
-    var S = ct.ST || {};
-    return {
-      X: S.X, Y: S.Y, Z: S.Z, T: S.T, X1: S.X1,
-      ip: S.ip, err: !!S.err, running: !!S.run
-    };
-  }
-
-  function runCase(c) {
-    var res = { name: c.name, prog: c.prog, expect: c.describe, got: "", ok: false };
-
-    if (!window.MKCore || typeof MKCore.create !== "function") {
-      res.got = "MKCore.create не найден — core.js не подключён";
-      return res;
-    }
-
-    var ct = makeCore(c.model || "mk-61");
-    if (!ct) { res.got = "create() вернул пусто"; return res; }
-
-    try {
-      ct.setProgram(c.prog.slice());
-      if (c.x !== undefined) ct.setX(c.x);
-      if (c.regs) {
-        for (var k in c.regs) {
-          if (Object.prototype.hasOwnProperty.call(c.regs, k)) ct.setRegister(Number(k), c.regs[k]);
-        }
-      }
-
-      var out = ct.run(500);
-      var st = readState(ct);
-
-      if (c.wantError) {
-        res.ok = !!st.err;
-        res.got = st.err ? "ЕГГ0Г" : ("X = " + fmt(st.X));
-        return res;
-      }
-
-      res.got = "X = " + fmt(st.X) + (st.err ? " · ЕГГ0Г" : "") +
-                (out && out.overflow ? " · не остановилась за 500 шагов" : "");
-      res.ok = !st.err && Math.abs(num(st.X) - c.expectX) <= EPS;
-      return res;
-    } catch (e) {
-      res.got = "исключение: " + e.message;
-      return res;
-    }
-  }
-
-  function num(v) { return typeof v === "number" ? v : NaN; }
-  function fmt(v) {
-    if (v === undefined || v === null) return "—";
-    if (typeof v !== "number") return String(v);
-    if (!isFinite(v)) return String(v);
-    return Math.abs(v) >= 1e10 || (Math.abs(v) < 1e-6 && v !== 0)
-      ? v.toExponential(6)
-      : String(+v.toFixed(10));
-  }
-
-  // --- кейсы -------------------------------------------------------------
-  // 0x0E = В↑, 0x50 = С/П, 0x10 + , 0x11 −, 0x12 × , 0x13 ÷
   var CASES = [
-    { name: "Сложение 2 + 3",      prog: [0x02, 0x0E, 0x03, 0x10, 0x50], expectX: 5, describe: "5" },
-    { name: "Умножение 2 × 3",     prog: [0x02, 0x0E, 0x03, 0x12, 0x50], expectX: 6, describe: "6" },
-    { name: "Вычитание 9 − 4",     prog: [0x09, 0x0E, 0x04, 0x11, 0x50], expectX: 5, describe: "5" },
-    { name: "Деление на ноль 1 ÷ 0", prog: [0x01, 0x0E, 0x00, 0x13, 0x50], wantError: true, describe: "ЕГГ0Г" },
-    { name: "Ввод двух цифр подряд", prog: [0x02, 0x03, 0x50], expectX: 23, describe: "23 (цифры дают одно число)" },
-    { name: "K |x| при X = −5",    prog: [0x31, 0x50], x: -5,   expectX: 5,   describe: "5" },
-    { name: "K [x] при X = 3,7",   prog: [0x34, 0x50], x: 3.7,  expectX: 3,   describe: "3" },
-    { name: "K {x} при X = 3,7",   prog: [0x35, 0x50], x: 3.7,  expectX: 0.7, describe: "0,7" },
-    { name: "K ЗН при X = −5",     prog: [0x32, 0x50], x: -5,   expectX: -1,  describe: "−1" },
-    { name: "K max: Y = 5, X = 0", prog: [0x05, 0x0E, 0x00, 0x36, 0x50], expectX: 0, describe: "0 (ноль наибольший)" },
-    { name: "K °→′″ при X = 1.523", prog: [0x2A, 0x50], x: 1.523, expectX: 1.875, describe: "1,875 (1°52′30″)" },
-    { name: "K °←′″ при X = 1,875", prog: [0x30, 0x50], x: 1.875, expectX: 1.523, describe: "1.523" },
-    { name: "Стоп по С/П",         prog: [0x05, 0x50], expectX: 5, describe: "X = 5, останов" }
+    { name: 'Сложение 2 + 3',             prog: [0x02, 0x0E, 0x03, 0x10, 0x50], expect: 5 },
+    { name: 'Умножение 2 × 3',            prog: [0x02, 0x0E, 0x03, 0x12, 0x50], expect: 6 },
+    { name: 'Вычитание 9 − 4',            prog: [0x09, 0x0E, 0x04, 0x11, 0x50], expect: 5 },
+    { name: 'Деление на ноль 1 ÷ 0',      prog: [0x01, 0x0E, 0x00, 0x13, 0x50], expectError: true },
+    { name: 'Ввод двух цифр подряд',      prog: [0x02, 0x03, 0x50], expect: 23 },
+    { name: 'K |x| при X = −5',           prog: [0x31, 0x50], x: -5, expect: 5 },
+    { name: 'K [x] при X = 3,7',          prog: [0x34, 0x50], x: 3.7, expect: 3 },
+    { name: 'K {x} при X = 3,7',          prog: [0x35, 0x50], x: 3.7, expect: 0.7, tol: 1e-9 },
+    { name: 'K ЗН при X = −5',            prog: [0x32, 0x50], x: -5, expect: -1 },
+    { name: 'K max: Y = 5, X = 0',        prog: [0x05, 0x0E, 0x00, 0x36, 0x50], expect: 0 },
+    { name: 'K →°′″ при X = 1.523',       prog: [0x2A, 0x50], x: 1.523, expect: 1.875, tol: 1e-9 },
+    { name: 'K ←°′″ при X = 1,875',       prog: [0x30, 0x50], x: 1.875, expect: 1.523, tol: 1e-9 },
+    { name: 'Стоп по С/П',                prog: [0x05, 0x50], expect: 5 }
   ];
 
-  // --- отрисовка ---------------------------------------------------------
-  function hex(prog) {
-    return prog.map(function (b) { return (b < 16 ? "0" : "") + b.toString(16).toUpperCase(); }).join(" ");
-  }
-
-  function esc(s) {
-    return String(s).replace(/[&<>"]/g, function (ch) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[ch];
-    });
-  }
-
-  function render(results) {
-    var passed = results.filter(function (r) { return r.ok; }).length;
-    var sum = document.getElementById("sum");
-    sum.textContent = "Пройдено " + passed + " из " + results.length;
-    sum.className = "sum " + (passed === results.length ? "ok" : "bad");
-
-    var html = "<table><caption>Результаты</caption><thead><tr>" +
-      "<th style=\"width:22px\"></th><th>Кейс</th><th>Программа</th><th>Ожидание</th><th>Факт</th>" +
-      "</tr></thead><tbody>";
-
-    results.forEach(function (r) {
-      html += "<tr class=\"" + (r.ok ? "pass" : "fail") + "\">" +
-        "<td class=\"mark\">" + (r.ok ? "✓" : "✗") + "</td>" +
-        "<td>" + esc(r.name) + "</td>" +
-        "<td><code>" + esc(hex(r.prog)) + "</code></td>" +
-        "<td>" + esc(r.expect) + "</td>" +
-        "<td>" + esc(r.got) + "</td>" +
-        "</tr>";
-    });
-
-    html += "</tbody></table>";
-    document.getElementById("out").innerHTML = html;
-  }
-
-  document.getElementById("run").addEventListener("click", function () {
-    render(CASES.map(runCase));
-  });
-
-  window.addEventListener("load", function () {
-    try {
-      render(CASES.map(runCase));
-    } catch (e) {
-      document.getElementById("sum").textContent = "Не удалось прогнать: " + e.message;
+  /* Отдельные проверки, которым нужен не прогон, а прямой вызов API. */
+  var EXTRA = [
+    {
+      name: 'Адрес 100 → «-0»',
+      prog: '—',
+      run: function () {
+        var got = MKProfiles.formatAddr(100, MODEL);
+        return { ok: got === '-0', fact: got };
+      }
+    },
+    {
+      name: 'Разбор «-4»',
+      prog: '—',
+      run: function () {
+        var got = MKProfiles.parseAddr('-4', MODEL);
+        return { ok: got === 104, fact: String(got) };
+      }
+    },
+    {
+      name: 'Ядро читает адрес -4 (0x51 0A 04)',
+      prog: [0x51, 0x0A, 0x04],
+      run: function () {
+        var ct = MKCore.create(MKProfiles.get(MODEL));
+        ct.setProgram([0x51, 0x0A, 0x04]);
+        var got = ct.jumpAddr(0);
+        return { ok: got === 104, fact: String(got) };
+      }
+    },
+    {
+      name: 'Подпись 4F — «x→П 0»',
+      prog: '—',
+      run: function () {
+        var got = MKCore.cmdName(0x4F, 15);
+        return { ok: got === 'x→П 0', fact: got };
+      }
     }
-  });
+  ];
+
+  function fmtProg(p) {
+    if (Array.isArray(p)) {
+      return p.map(function (c) {
+        var s = (c & 255).toString(16).toUpperCase();
+        return s.length < 2 ? '0' + s : s;
+      }).join(' ');
+    }
+    return String(p || '—');
+  }
+
+  function runProgramCase(c) {
+    var profile = MKProfiles.get(MODEL);
+    if (!profile) return { ok: false, fact: 'нет профиля ' + MODEL };
+    var ct = MKCore.create(profile);
+
+    ct.setProgram(c.prog);
+    if (typeof c.x === 'number') ct.setX(c.x);
+    if (Array.isArray(c.regs)) {
+      c.regs.forEach(function (pair) { ct.setRegister(pair[0], pair[1]); });
+    }
+
+    var res = ct.run(c.limit || 500);
+    var st = ct.ST;
+
+    if (c.expectError) {
+      return { ok: st.err === true, fact: st.err ? 'ЕГГОГ' : ('X = ' + MKCore.fmtNum(st.X)) };
+    }
+    if (st.err) return { ok: false, fact: 'ЕГГОГ' };
+
+    var tol = typeof c.tol === 'number' ? c.tol : 1e-9;
+    var ok = Math.abs(st.X - c.expect) <= tol;
+    return { ok: ok, fact: 'X = ' + MKCore.fmtNum(st.X) + ' (' + res.steps + ' шагов)' };
+  }
+
+  function render(rows, passed) {
+    var tbody = document.querySelector('#out tbody');
+    var html = '';
+    rows.forEach(function (r) {
+      html += '<tr>' +
+        '<td class="mark ' + (r.ok ? 'ok' : 'bad') + '">' + (r.ok ? '✓' : '✗') + '</td>' +
+        '<td>' + r.name + '</td>' +
+        '<td class="hex">' + fmtProg(r.prog) + '</td>' +
+        '<td>' + r.want + '</td>' +
+        '<td' + (r.ok ? '' : ' class="err"') + '>' + r.fact + '</td>' +
+        '</tr>';
+    });
+    tbody.innerHTML = html;
+    var sum = document.getElementById('summary');
+    var all = rows.length;
+    sum.className = passed === all ? 'pass' : 'fail';
+    sum.textContent = 'Пройдено ' + passed + ' из ' + all;
+  }
+
+  function go() {
+    var rows = [], passed = 0;
+
+    if (typeof MKCore === 'undefined' || typeof MKProfiles === 'undefined') {
+      document.getElementById('summary').className = 'fail';
+      document.getElementById('summary').textContent =
+        'Ядро не загрузилось: нет core.js или profiles.js рядом с этой страницей';
+      return;
+    }
+
+    CASES.forEach(function (c) {
+      var r;
+      try { r = runProgramCase(c); }
+      catch (e) { r = { ok: false, fact: 'исключение: ' + e.message }; }
+      var want = c.expectError ? 'ЕГГОГ' : ('X = ' + c.expect);
+      rows.push({ name: c.name, prog: c.prog, want: want, fact: r.fact, ok: r.ok });
+    });
+
+    EXTRA.forEach(function (c) {
+      var r;
+      try { r = c.run(); }
+      catch (e) { r = { ok: false, fact: 'исключение: ' + e.message }; }
+      rows.push({ name: c.name, prog: c.prog, want: c.want || '—', fact: r.fact, ok: r.ok });
+    });
+
+    rows.forEach(function (r) { if (r.ok) passed++; });
+    render(rows, passed);
+  }
+
+  document.getElementById('go').addEventListener('click', go);
+  go();
 })();
 </script>
 </body>
