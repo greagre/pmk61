@@ -10,8 +10,7 @@
    Ревизия 2:
    - cmdName учитывает пятнадцатый регистр (4E / 6E = Re) и не выдумывает
      подпись для кода за пределами профиля;
-   - jumpAddr понимает адреса 100…104 (вторая ячейка адреса содержит 0x0A),
-     если профиль это разрешает;
+   - jumpAddr понимает адреса 100…104, если профиль это разрешает;
    - modAddr считает модификацию по длине адресного пространства профиля.
 
    Ревизия 3 — K-функции (блок 0x26…0x3E):
@@ -26,28 +25,36 @@
 
    Ревизия 4 (по руководству Б3-34/МК-52/МК-54/МК-61, раздел
    «Назначение функциональных клавиш»):
-   - codeStr: исправлена таблица символов кодов (было «Г» вместо «D»,
-     из-за чего код 4D печатался как «4Г», а адрес вида 0x4D ломался);
+   - codeStr: исправлена таблица символов кодов;
    - угловые переводы 0x26, 0x2A, 0x30, 0x33 реализованы по описанию
-     руководства: «градусы, минуты, секунды и доли секунды» ↔ «градусы
-     и доли градуса» (и то же для часов, и вариант без секунд);
+     руководства («градусы, минуты, секунды и доли секунды» ↔
+     «градусы и доли градуса», и то же для часов, и вариант без секунд);
    - 0x32 K ЗН — определение знака числа;
-   - косвенные команды с регистрами (0xB… и 0xD…) больше не используют
-     modAddr: номер регистра модифицируется по модулю числа регистров
-     профиля, а не по адресному пространству (новый modReg);
+   - косвенные команды с регистрами (0xB… и 0xD…) используют modReg:
+     номер регистра модифицируется по модулю числа регистров профиля;
    - прямая запись X→П и вызов П→x с номером регистра за пределами
-     профиля дают ЕГГ0Г вместо записи в несуществующий регистр.
+     профиля дают ЕГГ0Г.
+
+   Ревизия 5 — по замечаниям контрольных тестов и руководству:
+   - jumpAddr: адрес 100…104 записывается ПЕРВОЙ ячейкой «•» (код 0x0A),
+     ВТОРОЙ — цифрой 0…4. Раньше было наоборот. На бумаге и на индикаторе
+     такой адрес пишут «-0»…«-4»;
+   - стек возврата ограничен пятью разрядами (шестой вызов ПП даёт ЕГГ0Г);
+   - modAddr округляет содержимое регистра до целого: раньше адрес 4,7
+     давал нецелый индекс и чтение «undefined» из памяти команд;
+   - исправлен адрес возврата косвенного вызова ПП (0xA0): раньше он
+     вычислялся уже после смены ST.ip и указывал не туда;
+   - cmdName: код 4F подписывается как «R0» (по таблице F означает R0),
+     а не как «Re» и не как «undefined».
 
    НЕ реализованы и дают ЕГГ0Г:
      0x37…0x3A                K AND, K OR, K XOR, K ИНВ — руководство
-                              называет только смысл («поразрядное логическое
-                              умножение» и т. п.), но не описывает, над чем
-                              именно выполняется операция (целые части?
-                              порядки? сколько разрядов?). Нужна сверка
-                              с эталонной реализацией, а не догадка;
+                              называет только смысл, но не описывает, над
+                              чем выполняется операция (целые части? порядки?
+                              сколько разрядов?). Нужна сверка с эталоном;
      0x55, 0x56               К 1, К 2 — назначение не установлено.
 
-   Важно по руководству: K-функции есть только у МК-52 и МК-61.
+   Важно: K-функции есть только у МК-52 и МК-61.
    У Б3-34 и МК-54 этих клавиш нет вовсе — профиль линии 34-го должен
    отдавать ЕГГ0Г на весь блок 0x26…0x3E (кроме NOP).
 
@@ -83,6 +90,8 @@
      10 = RGa, 11 = RGb, 12 = RGc, 13 = RGd, 14 = RGe. */
   var CODE_CHARS = '0123456789-LCDE ';
   var ANGLES = ['deg', 'grad', 'rad'];
+  /* Предел вложенности подпрограмм: пять разрядов стека возврата. */
+  var MAX_RET = 5;
 
   var CMD_NAMES = {
     0x0A: '·', 0x0B: '/-/', 0x0C: 'ВП', 0x0D: 'Cx', 0x0E: 'В↑', 0x0F: 'Вx',
@@ -120,6 +129,14 @@
     return s.length < 2 ? '0' + s : s;
   }
 
+  /* Подпись регистра по младшей цифре кода.
+     Цифра F (15) по таблице означает R0, поэтому подписывается «0». */
+  function regLabel(lo, regCount) {
+    if (lo === 15) return '0';
+    if (regCount && lo >= regCount) return null;
+    return DEF_REG_NAMES[lo];
+  }
+
   /* regCount необязателен: без него считаем, что регистры есть до Re.
      Для линии Б3-34 интерфейс передаёт 14 — тогда 4E/6E подписи не получат. */
   function cmdName(c, regCount) {
@@ -128,8 +145,9 @@
     var hi = c & 0xF0, lo = c & 0x0F;
     var nm = RANGE_NAMES[hi];
     if (nm) {
-      if (regCount && lo >= regCount) return '?';     /* такого регистра нет */
-      return nm + ' ' + DEF_REG_NAMES[lo];
+      var lbl = regLabel(lo, regCount);
+      if (lbl === null) return '?';
+      return nm + ' ' + lbl;
     }
     return '?';
   }
@@ -375,14 +393,6 @@
     }
 
     /* ---------- угловые переводы ---------- */
-    /* По руководству:
-       K →°′″ (0x2A) переводит «градусы, минуты, секунды и доли секунды»
-                    в «градусы и доли градуса»;
-       K ←°′″ (0x30) — обратно;
-       K →°′  (0x26) — «градусы, минуты и доли минуты» в доли градуса;
-       K ←°′  (0x33) — обратно.
-       Формат на индикаторе: 1,3045 читается как 1°30′45″,
-       1,30 — как 1°30′. Цифры после запятой — MMSS (или MM для °′). */
     function dmsToDeg(x) {
       var sign = x < 0 ? -1 : 1;
       var v = Math.abs(x);
@@ -400,7 +410,6 @@
       var rest = (v - d) * 60;
       var mm = Math.floor(rest + 1e-9);
       var ss = (rest - mm) * 60;
-      /* на индикаторе две цифры секунд, доли — уже за ними */
       ss = Math.round(ss * 100) / 100;
       if (ss >= 60) { ss -= 60; mm += 1; }
       if (mm >= 60) { mm -= 60; d += 1; }
@@ -549,20 +558,22 @@
 
     /* ---------- адреса ---------- */
     /* Адрес занимает две ячейки после команды.
-       Обычный адрес: десятки (0…9) и единицы (0…9).
-       Адрес 100…104 у МК-61: десятки 0…4 и вторая ячейка 0x0A (клавиша «•»).
-       На бумаге такие адреса записывают «-0»…«-4». */
+       Обычный адрес 00…99: первая ячейка — десятки, вторая — единицы.
+       Адрес 100…104 у МК-61 записывается наоборот: ПЕРВАЯ ячейка — клавиша
+       «•» (код 0x0A), ВТОРАЯ — цифра 0…4. На индикаторе и на бумаге такой
+       адрес пишут «-0»…«-4». */
     function jumpAddr(ip) {
       var at = (ip === undefined ? ST.ip : ip);
       var a = ST.prog[(at + 1) % PROG_LEN];
       var b = ST.prog[(at + 2) % PROG_LEN];
-      if (a > 9) return -1;
-      if (b > 9) {
-        if (!ADDR_HIGH || b !== 0x0A) return -1;
-        var high = ADDR_FIRST + a;
-        if (high > ADDR_LAST) return -1;
-        return high;
+
+      if (a === 0x0A) {
+        if (!ADDR_HIGH) return -1;
+        if (b > (ADDR_LAST - ADDR_FIRST)) return -1;
+        return ADDR_FIRST + b;
       }
+      if (a > 9) return -1;
+      if (b > 9) return -1;
       var v = a * 10 + b;
       if (v < 0 || v > MAX_ADDR) return -1;
       return v;
@@ -571,13 +582,18 @@
     /* Модификация адреса перехода (руководство, «Модификация адреса»):
        RG0–RG3 — из содержимого вычитается 1,
        RG4–RG6 — прибавляется 1,
-       RG7…RGe — содержимое не меняется. */
+       RG7…RGe — содержимое не меняется.
+       Содержимое регистра может быть нецелым, поэтому адрес округляется:
+       иначе получается дробный индекс в массиве команд. */
     function modAddr(v, r) {
+      var n = Math.round(Number(v));
+      if (!isFinite(n)) return -1;
       var a;
-      if (r >= 0 && r <= 3) a = (v - 1 + ADDR_SPAN) % ADDR_SPAN;
-      else if (r >= 4 && r <= 6) a = (v + 1) % ADDR_SPAN;
-      else a = v;
+      if (r >= 0 && r <= 3) a = (n - 1 + ADDR_SPAN) % ADDR_SPAN;
+      else if (r >= 4 && r <= 6) a = (n + 1) % ADDR_SPAN;
+      else a = ((n % ADDR_SPAN) + ADDR_SPAN) % ADDR_SPAN;
       if (a < 0 || a > MAX_ADDR) a = ((a % PROG_LEN) + PROG_LEN) % PROG_LEN;
+      if (a < 0 || a >= PROG_LEN) return -1;
       return a;
     }
 
@@ -635,6 +651,8 @@
       if (code === 0x53) {
         addr = jumpAddr();
         if (addr < 0) return badAddress();
+        /* стек возврата — пять разрядов, глубже ПМК не умеет */
+        if (ST.sub.length >= MAX_RET) { ST.err = true; ST.run = false; emit('error', null); return 'error'; }
         ST.sub.push((ST.ip + 3) % PROG_LEN);
         ST.ip = addr;
         return 'jump';
@@ -675,9 +693,13 @@
         return 'jump';
       }
       if (hi === 0xA) {
-        ST.ip = modAddr(ST.R[lo], lo);
-        if (ST.ip < 0) return badAddress();
-        ST.sub.push((ST.ip + 1) % PROG_LEN);
+        /* адрес возврата считается ДО смены ST.ip — иначе он указывает не туда */
+        var back = (ST.ip + 1) % PROG_LEN;
+        var target = modAddr(ST.R[lo], lo);
+        if (target < 0) return badAddress();
+        if (ST.sub.length >= MAX_RET) { ST.err = true; ST.run = false; emit('error', null); return 'error'; }
+        ST.sub.push(back);
+        ST.ip = target;
         return 'jump';
       }
       if (hi === 0xB) {
@@ -828,14 +850,20 @@
 
       /* ввод адреса перехода: каждая цифра — отдельная ячейка программы.
          Адреса 100…104 с клавиатуры вводятся клавишей «•» (код 0x0A)
-         как вторая цифра адреса; здесь поддерживаются обычные 00–99. */
-      if (ST.await === 'addr' && k.a === 'digit') {
-        ST.prog[ST.ip] = k.d;
+         как ПЕРВАЯ цифра адреса. */
+      if (ST.await === 'addr') {
+        var cell = null;
+        if (k.a === 'digit') cell = k.d;
+        else if (k.a === 'dot') cell = 0x0A;
+        if (cell === null) return;
+        ST.prog[ST.ip] = cell;
         ST.ip = (ST.ip + 1) % PROG_LEN;
-        ST.addrBuf += String(k.d);
+        ST.addrBuf += (cell === 0x0A ? '.' : String(cell));
         if (ST.addrBuf.length >= 2) {
-          var full = parseInt(ST.addrBuf, 10);
-          hint('Адрес перехода записан: ' + (full < 10 ? '0' : '') + full);
+          var full = ST.addrBuf.charAt(0) === '.'
+            ? (addrFirst() + parseInt(ST.addrBuf.charAt(1), 10))
+            : parseInt(ST.addrBuf, 10);
+          hint('Адрес перехода записан: ' + addrShow(full));
           ST.addrBuf = '';
           ST.await = null;
         } else {
@@ -968,6 +996,15 @@
       }
     }
 
+    function addrFirst() { return ADDR_FIRST; }
+
+    function addrShow(n) {
+      if (typeof n !== 'number' || n < 0) return '--';
+      if (n < 100) return (n < 10 ? '0' : '') + n;
+      if (ADDR_HIGH && n >= ADDR_FIRST && n <= ADDR_LAST) return '-' + (n - ADDR_FIRST);
+      return '--';
+    }
+
     function getLog() { return log.slice(0); }
     function clearLog() { log = []; }
     function record(msg) { pushLog(msg); }
@@ -1003,6 +1040,7 @@
       clearLog: clearLog,
       record: record,
       fmt: function (v) { return fmtNum(v, MAXDIG); },
+      addrShow: addrShow,
       /* подписи команд — с учётом числа регистров этого профиля */
       cmdName: function (c) { return cmdName(c, REG_COUNT); },
       jumpAddr: jumpAddr,
@@ -1020,7 +1058,8 @@
       HAS_K: HAS_K,
       ADDR_HIGH: ADDR_HIGH,
       ADDR_FIRST: ADDR_FIRST,
-      ADDR_LAST: ADDR_LAST
+      ADDR_LAST: ADDR_LAST,
+      MAX_RET: MAX_RET
     };
   }
 
@@ -1039,6 +1078,7 @@
     NOP: DEF_NOP,
     PROG_LEN: DEF_PROG_LEN,
     REG_COUNT: DEF_REG_COUNT,
-    MAXDIG: DEF_MAXDIG
+    MAXDIG: DEF_MAXDIG,
+    MAX_RET: MAX_RET
   };
 })(typeof window !== 'undefined' ? window : this);
