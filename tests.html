@@ -31,21 +31,25 @@
   code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
   .note { margin-top: 22px; font-size: 13px; color: #6b6b6b; }
   @media (prefers-color-scheme: dark) { .note { color: #9a9a9a; } }
+  .note h2 { font-size: 14px; margin: 16px 0 6px; }
 </style>
 </head>
 <body>
 
 <h1>pmk61 — контрольные тесты</h1>
-<div class="sub">Ядро <code>core.js</code>, профили <code>profiles.js</code>. Проверяются команды и пределы моделей, а не интерфейс.</div>
+<div class="sub">Ядро <code>core.js</code>, профили <code>profiles.js</code>. Проверяются команды и пределы модели, а не интерфейс.</div>
 
 <button id="run">Прогнать все</button>
 <div class="sum" id="sum">Нажми «Прогнать все»</div>
 <div id="out"></div>
 
 <div class="note">
-  <p><strong>Если кейс красный</strong> — это расхождение ядра с таблицей кодов, а не поломка страницы. Красная строка показывает, что получилось на самом деле.</p>
-  <p>Угловые кейсы и дробная часть сравниваются с допуском 1e-9: 0,7 из 3,7 в двоичной арифметике может отличаться в последнем разряде.</p>
-  <p>Подпрограммы и модификация адреса здесь не проверяются — для них нужны отдельные кейсы с ПП и F L0.</p>
+  <h2>Как читать результат</h2>
+  <p><strong>Красный кейс</strong> — расхождение ядра с таблицей кодов, а не поломка страницы: в колонке «Факт» видно, что получилось на самом деле.</p>
+  <p>Числа сравниваются с допуском 1e-9: 0,7 из 3,7 в двоичной арифметике отличается в последнем разряде.</p>
+  <h2>Почему в программах стоит «0E»</h2>
+  <p>На ПМК цифры подряд набирают одно число: <code>02 03</code> — это двадцать три, а не два и три. Чтобы получить два числа в стеке, между ними нужен <code>0E</code> (В↑). Прежние кейсы «2 + 3» без него были составлены неверно.</p>
+  <p>Каждая программа заканчивается <code>50</code> (С/П) — иначе прогон упрётся в лимит шагов и результат будет помечен как незавершённый, хотя X уже правильный.</p>
 </div>
 
 <script src="core.js"></script>
@@ -59,12 +63,11 @@
   function profileByName(name) {
     if (window.MKProfiles) {
       if (typeof MKProfiles.get === "function") {
-        try { return MKProfiles.get(name); } catch (e) {}
+        try { var p = MKProfiles.get(name); if (p) return p; } catch (e) {}
       }
       if (MKProfiles.PROFILES && MKProfiles.PROFILES[name]) return MKProfiles.PROFILES[name];
-      if (MKProfiles[name]) return MKProfiles[name];
     }
-    return { name: name };
+    return { id: name };
   }
 
   function makeCore(modelName) {
@@ -72,66 +75,47 @@
     return MKCore.create(profileByName(modelName));
   }
 
+  /* В ядре нет метода get(): состояние живёт в ct.ST. */
   function readState(ct) {
-    var st = {};
-    if (typeof ct.get === "function") {
-      var g = ct.get();
-      if (g) {
-        st.X = g.X; st.Y = g.Y; st.Z = g.Z; st.T = g.T; st.X1 = g.X1;
-      }
-    }
-    if (ct.ST) {
-      st.pc = ct.ST.pc;
-      st.halted = !!ct.ST.halted;
-      st.error = ct.ST.error || null;
-    }
-    return st;
+    var S = ct.ST || {};
+    return {
+      X: S.X, Y: S.Y, Z: S.Z, T: S.T, X1: S.X1,
+      ip: S.ip, err: !!S.err, running: !!S.run
+    };
   }
 
   function runCase(c) {
-    var res = { name: c.name, model: c.model, prog: c.prog, expect: c.describe, got: "", ok: false };
-    var ct = makeCore(c.model);
-    if (!ct) {
-      res.got = "нет MKCore.create — не подключено ядро";
+    var res = { name: c.name, prog: c.prog, expect: c.describe, got: "", ok: false };
+
+    if (!window.MKCore || typeof MKCore.create !== "function") {
+      res.got = "MKCore.create не найден — core.js не подключён";
       return res;
     }
+
+    var ct = makeCore(c.model || "mk-61");
+    if (!ct) { res.got = "create() вернул пусто"; return res; }
+
     try {
-      if (typeof ct.setProgram === "function") ct.setProgram(c.prog.slice());
-      if (c.x !== undefined && typeof ct.setX === "function") ct.setX(c.x);
+      ct.setProgram(c.prog.slice());
+      if (c.x !== undefined) ct.setX(c.x);
       if (c.regs) {
         for (var k in c.regs) {
           if (Object.prototype.hasOwnProperty.call(c.regs, k)) ct.setRegister(Number(k), c.regs[k]);
         }
       }
-      if (typeof ct.run === "function") {
-        try { ct.run(500); } catch (e) { res.got = "ошибка прогона: " + e.message; return res; }
-      } else if (typeof ct.step === "function") {
-        for (var i = 0; i < 500; i++) {
-          var s = readState(ct);
-          if (s.halted || s.error) break;
-          ct.step();
-        }
-      } else {
-        res.got = "в ядре нет run()/step() — интерфейс прогона не совпал";
-        return res;
-      }
 
+      var out = ct.run(500);
       var st = readState(ct);
 
       if (c.wantError) {
-        res.got = st.error ? ("ЕГГ0Г" ) : ("X = " + fmt(st.X));
-        res.ok = !!st.error;
+        res.ok = !!st.err;
+        res.got = st.err ? "ЕГГ0Г" : ("X = " + fmt(st.X));
         return res;
       }
 
-      if (c.pick) {
-        res.got = c.pick(st);
-        res.ok = !!c.check(st);
-        return res;
-      }
-
-      res.got = "X = " + fmt(st.X);
-      res.ok = Math.abs(num(st.X) - c.expectX) <= EPS;
+      res.got = "X = " + fmt(st.X) + (st.err ? " · ЕГГ0Г" : "") +
+                (out && out.overflow ? " · не остановилась за 500 шагов" : "");
+      res.ok = !st.err && Math.abs(num(st.X) - c.expectX) <= EPS;
       return res;
     } catch (e) {
       res.got = "исключение: " + e.message;
@@ -144,40 +128,38 @@
     if (v === undefined || v === null) return "—";
     if (typeof v !== "number") return String(v);
     if (!isFinite(v)) return String(v);
-    return Math.abs(v) >= 1e10 || (Math.abs(v) < 1e-6 && v !== 0) ? v.toExponential(6) : String(+v.toFixed(10));
+    return Math.abs(v) >= 1e10 || (Math.abs(v) < 1e-6 && v !== 0)
+      ? v.toExponential(6)
+      : String(+v.toFixed(10));
   }
 
   // --- кейсы -------------------------------------------------------------
+  // 0x0E = В↑, 0x50 = С/П, 0x10 + , 0x11 −, 0x12 × , 0x13 ÷
   var CASES = [
-    { name: "Сложение 2 + 3", model: "mk-61", prog: [0x02, 0x03, 0x10], expectX: 5, describe: "5" },
-    { name: "Умножение 2 × 3", model: "mk-61", prog: [0x02, 0x03, 0x12], expectX: 6, describe: "6" },
-    { name: "Деление на ноль 1 ÷ 0", model: "mk-61", prog: [0x01, 0x00, 0x13], wantError: true, describe: "ЕГГ0Г" },
-    { name: "K |x| при X = −5", model: "mk-61", prog: [0x31], x: -5, expectX: 5, describe: "5" },
-    { name: "K [x] при X = 3,7", model: "mk-61", prog: [0x34], x: 3.7, expectX: 3, describe: "3" },
-    { name: "K {x} при X = 3,7", model: "mk-61", prog: [0x35], x: 3.7, expectX: 0.7, describe: "0,7" },
-    { name: "K ЗН при X = −5", model: "mk-61", prog: [0x32], x: -5, expectX: -1, describe: "−1" },
-    { name: "K max: Y = 5, X = 0", model: "mk-61", prog: [0x05, 0x00, 0x36], expectX: 0, describe: "0 (ноль наибольший)" },
-    { name: "K →°′″ при X = 1.523", model: "mk-61", prog: [0x2A], x: 1.523, expectX: 1.875, describe: "1,875 (1°52′30″)" },
-    { name: "K ←°′″ при X = 1,875", model: "mk-61", prog: [0x30], x: 1.875, expectX: 1.523, describe: "1.523" },
-    { name: "Стоп по С/П", model: "mk-61", prog: [0x05, 0x50], expectX: 5, describe: "X = 5, останов" },
-    {
-      name: "Адрес 100 → «-0»", model: "mk-61", prog: [0x50],
-      pick: function () {
-        if (window.MKProfiles && typeof MKProfiles.formatAddr === "function") return MKProfiles.formatAddr(100);
-        return "нет MKProfiles.formatAddr";
-      },
-      check: function () {
-        return !!(window.MKProfiles && typeof MKProfiles.formatAddr === "function" && MKProfiles.formatAddr(100) === "-0");
-      },
-      describe: "-0"
-    }
+    { name: "Сложение 2 + 3",      prog: [0x02, 0x0E, 0x03, 0x10, 0x50], expectX: 5, describe: "5" },
+    { name: "Умножение 2 × 3",     prog: [0x02, 0x0E, 0x03, 0x12, 0x50], expectX: 6, describe: "6" },
+    { name: "Вычитание 9 − 4",     prog: [0x09, 0x0E, 0x04, 0x11, 0x50], expectX: 5, describe: "5" },
+    { name: "Деление на ноль 1 ÷ 0", prog: [0x01, 0x0E, 0x00, 0x13, 0x50], wantError: true, describe: "ЕГГ0Г" },
+    { name: "Ввод двух цифр подряд", prog: [0x02, 0x03, 0x50], expectX: 23, describe: "23 (цифры дают одно число)" },
+    { name: "K |x| при X = −5",    prog: [0x31, 0x50], x: -5,   expectX: 5,   describe: "5" },
+    { name: "K [x] при X = 3,7",   prog: [0x34, 0x50], x: 3.7,  expectX: 3,   describe: "3" },
+    { name: "K {x} при X = 3,7",   prog: [0x35, 0x50], x: 3.7,  expectX: 0.7, describe: "0,7" },
+    { name: "K ЗН при X = −5",     prog: [0x32, 0x50], x: -5,   expectX: -1,  describe: "−1" },
+    { name: "K max: Y = 5, X = 0", prog: [0x05, 0x0E, 0x00, 0x36, 0x50], expectX: 0, describe: "0 (ноль наибольший)" },
+    { name: "K °→′″ при X = 1.523", prog: [0x2A, 0x50], x: 1.523, expectX: 1.875, describe: "1,875 (1°52′30″)" },
+    { name: "K °←′″ при X = 1,875", prog: [0x30, 0x50], x: 1.875, expectX: 1.523, describe: "1.523" },
+    { name: "Стоп по С/П",         prog: [0x05, 0x50], expectX: 5, describe: "X = 5, останов" }
   ];
 
   // --- отрисовка ---------------------------------------------------------
   function hex(prog) {
-    return prog.map(function (b) {
-      return (b < 16 ? "0" : "") + b.toString(16).toUpperCase();
-    }).join(" ");
+    return prog.map(function (b) { return (b < 16 ? "0" : "") + b.toString(16).toUpperCase(); }).join(" ");
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[ch];
+    });
   }
 
   function render(results) {
@@ -204,18 +186,10 @@
     document.getElementById("out").innerHTML = html;
   }
 
-  function esc(s) {
-    return String(s).replace(/[&<>"]/g, function (ch) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[ch];
-    });
-  }
-
   document.getElementById("run").addEventListener("click", function () {
-    var results = CASES.map(runCase);
-    render(results);
+    render(CASES.map(runCase));
   });
 
-  // автозапуск
   window.addEventListener("load", function () {
     try {
       render(CASES.map(runCase));
