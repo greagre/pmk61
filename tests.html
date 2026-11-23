@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmk61 — контрольные тесты</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px 14px 40px; background: #f6f6f4; color: #1c1c1c; }
+  @media (prefers-color-scheme: dark) { body { background: #16181a; color: #e8e8e8; } }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: #6b6b6b; font-size: 13px; margin-bottom: 16px; }
+  @media (prefers-color-scheme: dark) { .sub { color: #9a9a9a; } }
+  button { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 10px;
+           border: 1px solid #2c6bed; background: #2c6bed; color: #fff; cursor: pointer; }
+  button:active { transform: translateY(1px); }
+  .sum { margin: 14px 0; font-weight: 600; }
+  .sum.ok { color: #1a7f4b; }
+  .sum.bad { color: #c0272d; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  caption { text-align: left; font-weight: 600; padding: 6px 0; }
+  th, td { border: 1px solid #d8d8d4; padding: 6px 8px; text-align: left; vertical-align: top; }
+  @media (prefers-color-scheme: dark) { th, td { border-color: #33373b; } }
+  th { background: #eceae4; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { th { background: #212528; } }
+  tr.pass td.mark { color: #1a7f4b; font-weight: 700; }
+  tr.fail td.mark { color: #c0272d; font-weight: 700; }
+  tr.fail { background: #fff2f2; }
+  @media (prefers-color-scheme: dark) { tr.fail { background: #2a1a1a; } }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .note { margin-top: 22px; font-size: 13px; color: #6b6b6b; }
+  @media (prefers-color-scheme: dark) { .note { color: #9a9a9a; } }
+</style>
+</head>
+<body>
+
+<h1>pmk61 — контрольные тесты</h1>
+<div class="sub">Ядро <code>core.js</code>, профили <code>profiles.js</code>. Проверяются команды и пределы моделей, а не интерфейс.</div>
+
+<button id="run">Прогнать все</button>
+<div class="sum" id="sum">Нажми «Прогнать все»</div>
+<div id="out"></div>
+
+<div class="note">
+  <p><strong>Если кейс красный</strong> — это расхождение ядра с таблицей кодов, а не поломка страницы. Красная строка показывает, что получилось на самом деле.</p>
+  <p>Угловые кейсы и дробная часть сравниваются с допуском 1e-9: 0,7 из 3,7 в двоичной арифметике может отличаться в последнем разряде.</p>
+  <p>Подпрограммы и модификация адреса здесь не проверяются — для них нужны отдельные кейсы с ПП и F L0.</p>
+</div>
+
+<script src="core.js"></script>
+<script src="profiles.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var EPS = 1e-9;
+
+  function profileByName(name) {
+    if (window.MKProfiles) {
+      if (typeof MKProfiles.get === "function") {
+        try { return MKProfiles.get(name); } catch (e) {}
+      }
+      if (MKProfiles.PROFILES && MKProfiles.PROFILES[name]) return MKProfiles.PROFILES[name];
+      if (MKProfiles[name]) return MKProfiles[name];
+    }
+    return { name: name };
+  }
+
+  function makeCore(modelName) {
+    if (!window.MKCore || typeof MKCore.create !== "function") return null;
+    return MKCore.create(profileByName(modelName));
+  }
+
+  function readState(ct) {
+    var st = {};
+    if (typeof ct.get === "function") {
+      var g = ct.get();
+      if (g) {
+        st.X = g.X; st.Y = g.Y; st.Z = g.Z; st.T = g.T; st.X1 = g.X1;
+      }
+    }
+    if (ct.ST) {
+      st.pc = ct.ST.pc;
+      st.halted = !!ct.ST.halted;
+      st.error = ct.ST.error || null;
+    }
+    return st;
+  }
+
+  function runCase(c) {
+    var res = { name: c.name, model: c.model, prog: c.prog, expect: c.describe, got: "", ok: false };
+    var ct = makeCore(c.model);
+    if (!ct) {
+      res.got = "нет MKCore.create — не подключено ядро";
+      return res;
+    }
+    try {
+      if (typeof ct.setProgram === "function") ct.setProgram(c.prog.slice());
+      if (c.x !== undefined && typeof ct.setX === "function") ct.setX(c.x);
+      if (c.regs) {
+        for (var k in c.regs) {
+          if (Object.prototype.hasOwnProperty.call(c.regs, k)) ct.setRegister(Number(k), c.regs[k]);
+        }
+      }
+      if (typeof ct.run === "function") {
+        try { ct.run(500); } catch (e) { res.got = "ошибка прогона: " + e.message; return res; }
+      } else if (typeof ct.step === "function") {
+        for (var i = 0; i < 500; i++) {
+          var s = readState(ct);
+          if (s.halted || s.error) break;
+          ct.step();
+        }
+      } else {
+        res.got = "в ядре нет run()/step() — интерфейс прогона не совпал";
+        return res;
+      }
+
+      var st = readState(ct);
+
+      if (c.wantError) {
+        res.got = st.error ? ("ЕГГ0Г" ) : ("X = " + fmt(st.X));
+        res.ok = !!st.error;
+        return res;
+      }
+
+      if (c.pick) {
+        res.got = c.pick(st);
+        res.ok = !!c.check(st);
+        return res;
+      }
+
+      res.got = "X = " + fmt(st.X);
+      res.ok = Math.abs(num(st.X) - c.expectX) <= EPS;
+      return res;
+    } catch (e) {
+      res.got = "исключение: " + e.message;
+      return res;
+    }
+  }
+
+  function num(v) { return typeof v === "number" ? v : NaN; }
+  function fmt(v) {
+    if (v === undefined || v === null) return "—";
+    if (typeof v !== "number") return String(v);
+    if (!isFinite(v)) return String(v);
+    return Math.abs(v) >= 1e10 || (Math.abs(v) < 1e-6 && v !== 0) ? v.toExponential(6) : String(+v.toFixed(10));
+  }
+
+  // --- кейсы -------------------------------------------------------------
+  var CASES = [
+    { name: "Сложение 2 + 3", model: "mk-61", prog: [0x02, 0x03, 0x10], expectX: 5, describe: "5" },
+    { name: "Умножение 2 × 3", model: "mk-61", prog: [0x02, 0x03, 0x12], expectX: 6, describe: "6" },
+    { name: "Деление на ноль 1 ÷ 0", model: "mk-61", prog: [0x01, 0x00, 0x13], wantError: true, describe: "ЕГГ0Г" },
+    { name: "K |x| при X = −5", model: "mk-61", prog: [0x31], x: -5, expectX: 5, describe: "5" },
+    { name: "K [x] при X = 3,7", model: "mk-61", prog: [0x34], x: 3.7, expectX: 3, describe: "3" },
+    { name: "K {x} при X = 3,7", model: "mk-61", prog: [0x35], x: 3.7, expectX: 0.7, describe: "0,7" },
+    { name: "K ЗН при X = −5", model: "mk-61", prog: [0x32], x: -5, expectX: -1, describe: "−1" },
+    { name: "K max: Y = 5, X = 0", model: "mk-61", prog: [0x05, 0x00, 0x36], expectX: 0, describe: "0 (ноль наибольший)" },
+    { name: "K →°′″ при X = 1.523", model: "mk-61", prog: [0x2A], x: 1.523, expectX: 1.875, describe: "1,875 (1°52′30″)" },
+    { name: "K ←°′″ при X = 1,875", model: "mk-61", prog: [0x30], x: 1.875, expectX: 1.523, describe: "1.523" },
+    { name: "Стоп по С/П", model: "mk-61", prog: [0x05, 0x50], expectX: 5, describe: "X = 5, останов" },
+    {
+      name: "Адрес 100 → «-0»", model: "mk-61", prog: [0x50],
+      pick: function () {
+        if (window.MKProfiles && typeof MKProfiles.formatAddr === "function") return MKProfiles.formatAddr(100);
+        return "нет MKProfiles.formatAddr";
+      },
+      check: function () {
+        return !!(window.MKProfiles && typeof MKProfiles.formatAddr === "function" && MKProfiles.formatAddr(100) === "-0");
+      },
+      describe: "-0"
+    }
+  ];
+
+  // --- отрисовка ---------------------------------------------------------
+  function hex(prog) {
+    return prog.map(function (b) {
+      return (b < 16 ? "0" : "") + b.toString(16).toUpperCase();
+    }).join(" ");
+  }
+
+  function render(results) {
+    var passed = results.filter(function (r) { return r.ok; }).length;
+    var sum = document.getElementById("sum");
+    sum.textContent = "Пройдено " + passed + " из " + results.length;
+    sum.className = "sum " + (passed === results.length ? "ok" : "bad");
+
+    var html = "<table><caption>Результаты</caption><thead><tr>" +
+      "<th style=\"width:22px\"></th><th>Кейс</th><th>Программа</th><th>Ожидание</th><th>Факт</th>" +
+      "</tr></thead><tbody>";
+
+    results.forEach(function (r) {
+      html += "<tr class=\"" + (r.ok ? "pass" : "fail") + "\">" +
+        "<td class=\"mark\">" + (r.ok ? "✓" : "✗") + "</td>" +
+        "<td>" + esc(r.name) + "</td>" +
+        "<td><code>" + esc(hex(r.prog)) + "</code></td>" +
+        "<td>" + esc(r.expect) + "</td>" +
+        "<td>" + esc(r.got) + "</td>" +
+        "</tr>";
+    });
+
+    html += "</tbody></table>";
+    document.getElementById("out").innerHTML = html;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[ch];
+    });
+  }
+
+  document.getElementById("run").addEventListener("click", function () {
+    var results = CASES.map(runCase);
+    render(results);
+  });
+
+  // автозапуск
+  window.addEventListener("load", function () {
+    try {
+      render(CASES.map(runCase));
+    } catch (e) {
+      document.getElementById("sum").textContent = "Не удалось прогнать: " + e.message;
+    }
+  });
+})();
+</script>
+</body>
+</html>
