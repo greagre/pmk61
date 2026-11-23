@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>МК-61 — эмулятор (архив v1)</title>
+<style>
+  :root{
+    --case:#2b2f36; --case2:#3a3f48; --key:#4a505b; --key2:#3c424c;
+    --fn:#5a6270; --acc:#e8b64c; --screen:#b9c9a8; --ink:#1b2114;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    margin:0;padding:14px 10px 28px;background:#15181d;
+    font-family:-apple-system,Roboto,"Segoe UI",sans-serif;color:#e8eaee;
+    display:flex;justify-content:center;
+  }
+  .case{
+    width:100%;max-width:430px;background:linear-gradient(180deg,var(--case2),var(--case));
+    border-radius:22px;padding:14px 12px 16px;
+    box-shadow:0 18px 40px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  .brand{display:flex;justify-content:space-between;align-items:center;margin:0 4px 10px}
+  .brand b{font-size:15px;letter-spacing:.14em;color:#f0e2bd}
+  .brand span{font-size:11px;color:#9aa1ad;letter-spacing:.06em}
+  .screen{
+    background:linear-gradient(180deg,#c8d6b8,var(--screen));
+    border-radius:10px;padding:8px 10px 7px;color:var(--ink);
+    box-shadow:inset 0 3px 10px rgba(0,0,0,.45);
+  }
+  .indic{display:flex;gap:8px;font-size:10px;letter-spacing:.08em;
+    font-family:ui-monospace,Menlo,monospace;height:12px;opacity:.85}
+  .indic i{font-style:normal;opacity:.18}
+  .indic i.on{opacity:1;font-weight:700}
+  .digits{
+    font-family:ui-monospace,"Courier New",monospace;font-weight:700;
+    font-size:26px;text-align:right;line-height:1.25;min-height:34px;
+    overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+  }
+  .digits.err{color:#8a1414}
+  .status{font-family:ui-monospace,monospace;font-size:10px;opacity:.72;
+    display:flex;justify-content:space-between;gap:8px;margin-top:1px}
+  .status .hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;flex:1}
+  .regs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:10px 0 8px}
+  .reg{
+    background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.07);
+    border-radius:7px;padding:4px 3px 3px;text-align:center;cursor:pointer;
+    transition:background .12s,border-color .12s;
+  }
+  .reg.act{border-color:var(--acc);background:rgba(232,182,76,.16)}
+  .reg .n{font-size:9px;color:#98a0ac;letter-spacing:.06em}
+  .reg .nz{font-size:9px;color:var(--acc);letter-spacing:.06em}
+  .reg .v{font-family:ui-monospace,monospace;font-size:11px;color:#dfe4ec;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .keys{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .k{
+    appearance:none;border:0;border-radius:9px;padding:11px 2px 9px;
+    background:linear-gradient(180deg,var(--key),var(--key2));color:#f2f4f8;
+    font-size:13px;font-weight:600;cursor:pointer;
+    box-shadow:0 2px 0 rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.09);
+    transition:transform .06s,box-shadow .06s;
+  }
+  .k:active{transform:translateY(2px);box-shadow:none}
+  .k small{display:block;font-size:8px;font-weight:500;opacity:.62;margin-top:1px}
+  .k.fn{background:linear-gradient(180deg,var(--fn),#464c57);font-size:12px}
+  .k.acc{background:linear-gradient(180deg,#c99b39,#a87d26);color:#1c1608}
+  .k.wide{grid-column:span 2}
+  .sep{grid-column:1/-1;height:1px;background:rgba(255,255,255,.07);margin:5px 0}
+  .sec{grid-column:1/-1;font-size:10px;letter-spacing:.1em;color:#8e96a3;
+    text-transform:uppercase;margin:6px 2px 0}
+  .foot{margin:14px 6px 0;font-size:11px;color:#8e96a3;text-align:center;line-height:1.6}
+  .foot a{color:#c9b070}
+</style>
+</head>
+<body>
+<div class="case">
+  <div class="brand"><b>МК-61</b><span id="modelTag"></span></div>
+
+  <div class="screen">
+    <div class="indic">
+      <i id="iF">F</i><i id="iK">K</i><i id="iPRG">ПРГ</i><i id="iANG">ГРД</i><i id="iERR">ЕГГ0Г</i>
+    </div>
+    <div class="digits" id="disp">0</div>
+    <div class="status">
+      <span id="pos">00 · АВТ</span>
+      <span class="hint" id="hint"></span>
+    </div>
+  </div>
+
+  <div class="regs" id="regs"></div>
+  <div class="keys" id="keys"></div>
+
+  <div class="foot">
+    Архивная копия этапа v1. Ядро берётся из корня репозитория.<br>
+    Порядок ввода как у ПМК: <b>X→П</b>, затем регистр — как вторая клавиша.<br>
+    <a href="../../tests.html">контрольные тесты</a> · <a href="../../index.html">рабочая версия</a>
+  </div>
+</div>
+
+<script src="../../profiles.js?v=12"></script>
+<script src="../../core.js?v=12"></script>
+<!-- надстройка: после X→П набор числа завершается, следующая цифра начинает новое число -->
+<script src="sto-fix.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var models = MKProfiles.listStable();
+  var modelId = localStorage.getItem('pmk61/model') || MKProfiles.DEFAULT_MODEL;
+  if (!MKProfiles.get(modelId)) modelId = MKProfiles.DEFAULT_MODEL;
+
+  var core = null;
+  var hintText = '';
+
+  /* ---------- описание клавиатуры ---------- */
+  /* key — то, что уходит в core.key(); cls — оформление */
+  var KEYS = [
+    { sec: 'Управление' },
+    { t: 'F', key: { a: 'pref-f' }, cls: 'fn' },
+    { t: 'K', key: { a: 'pref-k' }, cls: 'fn' },
+    { t: 'Cx', key: { a: 'code', c: 0x0D }, cls: 'fn' },
+    { t: 'В↑', key: { a: 'code', c: 0x0E }, cls: 'fn', sub: 'сдвиг стека' },
+    { t: 'Вx', key: { a: 'code', c: 0x0F }, cls: 'fn', sub: 'F Вx' },
+    { t: '↔', key: { a: 'code', c: 0x14 }, cls: 'fn', sub: 'X и Y' },
+    { t: 'ПРГ', key: { a: 'prg' }, cls: 'fn' },
+    { t: 'АВТ', key: { a: 'aut' }, cls: 'fn' },
+
+    { sec: 'Числа' },
+    { t: '7', key: { a: 'digit', d: 7 } },
+    { t: '8', key: { a: 'digit', d: 8 } },
+    { t: '9', key: { a: 'digit', d: 9 } },
+    { t: '÷', key: { a: 'code', c: 0x13 }, cls: 'acc' },
+    { t: '4', key: { a: 'digit', d: 4 } },
+    { t: '5', key: { a: 'digit', d: 5 } },
+    { t: '6', key: { a: 'digit', d: 6 } },
+    { t: '×', key: { a: 'code', c: 0x12 }, cls: 'acc' },
+    { t: '1', key: { a: 'digit', d: 1 } },
+    { t: '2', key: { a: 'digit', d: 2 } },
+    { t: '3', key: { a: 'digit', d: 3 } },
+    { t: '−', key: { a: 'code', c: 0x11 }, cls: 'acc' },
+    { t: '0', key: { a: 'digit', d: 0 } },
+    { t: '•', key: { a: 'dot' }, sub: 'точка' },
+    { t: '/−/', key: { a: 'code', c: 0x0B }, sub: 'знак' },
+    { t: '+', key: { a: 'code', c: 0x10 }, cls: 'acc' },
+
+    { sec: 'Регистры' },
+    { t: 'X→П', key: { a: 'stox' }, cls: 'fn', sub: 'запись' },
+    { t: 'П→x', key: { a: 'loadx' }, cls: 'fn', sub: 'чтение' },
+    { t: 'БП', key: { a: 'bp' }, cls: 'fn', sub: 'безусл.' },
+    { t: 'ПП', key: { a: 'pp' }, cls: 'fn', sub: 'подпрогр.' },
+    { t: 'В/О', key: { a: 'vo' }, cls: 'fn', sub: 'возврат' },
+    { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
+    { t: 'ВП', key: { a: 'code', c: 0x0C }, cls: 'fn', sub: 'порядок' },
+
+    { sec: 'F-функции' },
+    { t: '√', key: { a: 'code', c: 0x21 }, sub: 'F √' },
+    { t: 'x²', key: { a: 'code', c: 0x22 }, sub: 'F x²' },
+    { t: '1/x', key: { a: 'code', c: 0x23 }, sub: 'F 1/x' },
+    { t: 'x^y', key: { a: 'code', c: 0x24 }, sub: 'F x^y' },
+    { t: 'π', key: { a: 'code', c: 0x20 }, sub: 'F π' },
+    { t: 'lg', key: { a: 'code', c: 0x17 }, sub: 'F lg' },
+    { t: 'ln', key: { a: 'code', c: 0x18 }, sub: 'F ln' },
+    { t: 'e^x', key: { a: 'code', c: 0x16 }, sub: 'F e^x' },
+    { t: '10^x', key: { a: 'code', c: 0x15 }, sub: 'F 10^x' },
+
+    { sec: 'Тригонометрия' },
+    { t: 'sin', key: { a: 'code', c: 0x1C }, sub: 'F sin' },
+    { t: 'cos', key: { a: 'code', c: 0x1D }, sub: 'F cos' },
+    { t: 'tg', key: { a: 'code', c: 0x1E }, sub: 'F tg' },
+    { t: 'sin⁻¹', key: { a: 'code', c: 0x19 }, sub: 'F arcsin' },
+    { t: 'cos⁻¹', key: { a: 'code', c: 0x1A }, sub: 'F arccos' },
+    { t: 'tg⁻¹', key: { a: 'code', c: 0x1B }, sub: 'F arctg' },
+
+    { sec: 'K-функции' },
+    { t: '|x|', key: { a: 'code', c: 0x31 }, sub: 'K |x|' },
+    { t: 'ЗН', key: { a: 'code', c: 0x32 }, sub: 'K ЗН' },
+    { t: '[x]', key: { a: 'code', c: 0x34 }, sub: 'K [x]' },
+    { t: '{x}', key: { a: 'code', c: 0x35 }, sub: 'K {x}' },
+    { t: 'max', key: { a: 'code', c: 0x36 }, sub: 'K max' },
+    { t: 'СЧ', key: { a: 'code', c: 0x3B }, sub: 'K СЧ' },
+    { t: '°→′', key: { a: 'code', c: 0x26 }, sub: 'K °→′' },
+    { t: '°→′″', key: { a: 'code', c: 0x2A }, sub: 'K °→′″' },
+    { t: '°←′″', key: { a: 'code', c: 0x30 }, sub: 'K °←′″' },
+    { t: '°←′', key: { a: 'code', c: 0x33 }, sub: 'K °←′' }
+  ];
+
+  /* ---------- построение ---------- */
+  function build(id) {
+    var p = MKProfiles.get(id);
+    if (!p) return;
+    core = MKCore.create({
+      progLen: p.progLen,
+      regCount: p.regCount,
+      nop: p.nop,
+      maxDig: p.maxDig,
+      addrHigh: !!p.addrHigh,
+      addrHighFirst: p.addrHighFirst,
+      addrHighLast: p.addrHighLast,
+      hasK: p.family !== 'Б3-34',
+      onEvent: function (type, data) {
+        if (type === 'hint') hintText = data || '';
+        if (type === 'pick-register') hintText = 'Выбери регистр';
+        render();
+      }
+    });
+    modelId = id;
+    localStorage.setItem('pmk61/model', id);
+    document.getElementById('modelTag').textContent = p.title;
+    renderRegs();
+    render();
+  }
+
+  function renderKeys() {
+    var host = document.getElementById('keys');
+    var html = '';
+    for (var i = 0; i < KEYS.length; i++) {
+      var k = KEYS[i];
+      if (k.sec) { html += '<div class="sec">' + k.sec + '</div>'; continue; }
+      html += '<button class="k ' + (k.cls || '') + '" data-i="' + i + '">' + k.t +
+              (k.sub ? '<small>' + k.sub + '</small>' : '') + '</button>';
+    }
+    host.innerHTML = html;
+    host.addEventListener('click', function (e) {
+      var b = e.target.closest('.k');
+      if (!b) return;
+      var item = KEYS[+b.dataset.i];
+      if (!item || !item.key) return;
+      hintText = '';
+      core.key(item.key);
+      render();
+    });
+  }
+
+  function renderRegs() {
+    var host = document.getElementById('regs');
+    var html = '';
+    for (var r = 0; r < core.REG_COUNT; r++) {
+      var name = core.REG_NAMES[r];
+      var n = (core.ST.await === 'reg' && core.ST.kind === 0x40 && r === 0) ? 'nz' : 'n';
+      html += '<div class="reg" data-r="' + r + '">' +
+              '<div class="' + n + '">R' + name + '</div>' +
+              '<div class="v" id="rv' + r + '">0</div></div>';
+    }
+    host.innerHTML = html;
+    host.addEventListener('click', function (e) {
+      var cell = e.target.closest('.reg');
+      if (!cell) return;
+      var r = +cell.dataset.r;
+      var kind = core.ST.kind;
+      var mode = (kind === 0x40) ? 'sto' : (kind === 0x60 ? 'ld' : 'k');
+      hintText = '';
+      core.key({ a: 'reg', r: r, mode: mode });
+      render();
+    });
+  }
+
+  function dispText() {
+    var ST = core.ST;
+    if (ST.err) return 'ЕГГ0Г';
+    if (ST.typing) {
+      var s = ST.input || '0';
+      return s.replace('e', ' E ');
+    }
+    return core.fmt(ST.X);
+  }
+
+  function render() {
+    var ST = core.ST;
+    var d = document.getElementById('disp');
+    d.textContent = dispText();
+    d.classList.toggle('err', !!ST.err);
+
+    document.getElementById('iF').classList.toggle('on', ST.layer === 'f');
+    document.getElementById('iK').classList.toggle('on', ST.layer === 'k');
+    document.getElementById('iPRG').classList.toggle('on', ST.mode === 'PRG');
+    document.getElementById('iERR').classList.toggle('on', !!ST.err);
+    var ang = document.getElementById('iANG');
+    ang.textContent = ST.angle === 'rad' ? 'РАД' : (ST.angle === 'grad' ? 'ГРД' : 'ГРАД');
+    ang.classList.add('on');
+
+    document.getElementById('pos').textContent =
+      core.addrShow(ST.ip) + ' · ' + (ST.mode === 'PRG' ? 'ПРГ' : 'АВТ');
+
+    var hint = document.getElementById('hint');
+    hint.textContent = hintText;
+
+    for (var r = 0; r < core.REG_COUNT; r++) {
+      var el = document.getElementById('rv' + r);
+      if (el) el.textContent = core.fmt(ST.R[r]);
+    }
+    var cells = document.querySelectorAll('.reg');
+    for (var i = 0; i < cells.length; i++) {
+      cells[i].classList.toggle('act', ST.await === 'reg');
+    }
+  }
+
+  /* клавиатура компьютера — по желанию, основное всё равно пальцем */
+  document.addEventListener('keydown', function (e) {
+    if (!core) return;
+    var c = e.key;
+    if (/^[0-9]$/.test(c)) { core.key({ a: 'digit', d: +c }); render(); e.preventDefault(); return; }
+    if (c === '.') { core.key({ a: 'dot' }); render(); e.preventDefault(); return; }
+    if (c === '+') { core.key({ a: 'code', c: 0x10 }); render(); e.preventDefault(); return; }
+    if (c === '-') { core.key({ a: 'code', c: 0x11 }); render(); e.preventDefault(); return; }
+    if (c === '*') { core.key({ a: 'code', c: 0x12 }); render(); e.preventDefault(); return; }
+    if (c === '/') { core.key({ a: 'code', c: 0x13 }); render(); e.preventDefault(); return; }
+    if (c === 'Enter') { core.key({ a: 'sp' }); render(); e.preventDefault(); return; }
+    if (c === 'Escape') { core.key({ a: 'code', c: 0x0D }); render(); e.preventDefault(); return; }
+  });
+
+  renderKeys();
+  build(modelId);
+})();
+</script>
+</body>
+</html>
