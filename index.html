@@ -42,6 +42,7 @@
     display:flex;justify-content:space-between;gap:8px;margin-top:1px}
   .status .hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;flex:1}
   .regs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:10px 0 8px}
+  .regs.hide{display:none}
   .reg{
     background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.07);
     border-radius:7px;padding:4px 3px 3px;text-align:center;cursor:pointer;
@@ -68,6 +69,13 @@
   .sep{grid-column:1/-1;height:1px;background:rgba(255,255,255,.07);margin:5px 0}
   .sec{grid-column:1/-1;font-size:10px;letter-spacing:.1em;color:#8e96a3;
     text-transform:uppercase;margin:6px 2px 0}
+  .layers{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:9px 0 2px}
+  .lay{
+    appearance:none;border:1px solid rgba(255,255,255,.1);border-radius:8px;
+    background:rgba(0,0,0,.22);color:#aeb6c2;font-size:11px;font-weight:600;
+    letter-spacing:.04em;padding:7px 2px;cursor:pointer;transition:background .12s,color .12s,border-color .12s;
+  }
+  .lay.on{background:rgba(232,182,76,.18);border-color:var(--acc);color:#f0d79b}
   .foot{margin:14px 6px 0;font-size:11px;color:#8e96a3;text-align:center;line-height:1.6}
   .foot a{color:#c9b070}
 </style>
@@ -78,7 +86,7 @@
 
   <div class="screen">
     <div class="indic">
-      <i id="iF">F</i><i id="iK">K</i><i id="iPRG">ПРГ</i><i id="iANG">ГРД</i><i id="iERR">ЕГГ0Г</i>
+      <i id="iF">F</i><i id="iK">K</i><i id="iR">R</i><i id="iPRG">ПРГ</i><i id="iANG">ГРД</i><i id="iERR">ЕГГ0Г</i>
     </div>
     <div class="digits" id="disp">0</div>
     <div class="status">
@@ -87,11 +95,13 @@
     </div>
   </div>
 
-  <div class="regs" id="regs"></div>
+  <div class="layers" id="layers"></div>
+  <div class="regs hide" id="regs"></div>
   <div class="keys" id="keys"></div>
 
   <div class="foot">
-    Порядок ввода как у ПМК: <b>X→П</b>, затем регистр — как вторая клавиша.<br>
+    Три экрана клавиатуры: <b>Числа</b> · <b>Функции</b> · <b>Регистры</b>.<br>
+    После любой клавиши возврат на <b>Числа</b>, как снятие слоя у оригинала.<br>
     <b>Сброс</b> гасит регистры и программу; сохранённые в библиотеке остаются.<br>
     <a href="tests.html">контрольные тесты</a>
   </div>
@@ -111,82 +121,103 @@
 
   var core = null;
   var hintText = '';
+  var uiLayer = 'main';
 
-  /* ---------- описание клавиатуры ---------- */
-  /* key — то, что уходит в core.key(); cls — оформление; act — действие интерфейса */
-  var KEYS = [
-    { sec: 'Управление' },
-    { t: 'F', key: { a: 'pref-f' }, cls: 'fn' },
-    { t: 'K', key: { a: 'pref-k' }, cls: 'fn' },
-    { t: 'Cx', key: { a: 'code', c: 0x0D }, cls: 'fn' },
-    { t: 'В↑', key: { a: 'code', c: 0x0E }, cls: 'fn', sub: 'сдвиг стека' },
-    { t: 'Вx', key: { a: 'code', c: 0x0F }, cls: 'fn', sub: 'F Вx' },
-    { t: '↔', key: { a: 'code', c: 0x14 }, cls: 'fn', sub: 'X и Y' },
-    { t: 'ПРГ', key: { a: 'prg' }, cls: 'fn' },
-    { t: 'АВТ', key: { a: 'aut' }, cls: 'fn' },
+  /* ---------- три экрана клавиатуры ----------
+     Экраны — это только представление. Слой ядра (ST.layer) не трогаем:
+     у оригинала он значит «следующая клавиша — функция», а здесь функции
+     и так лежат своими кнопками. Но индикатор F/R показывает, где мы. */
+  var LAYERS = {
+    main: {
+      title: 'Числа',
+      keys: [
+        { t: 'Cx', key: { a: 'code', c: 0x0D }, cls: 'fn', sub: 'гасит X' },
+        { t: 'В↑', key: { a: 'code', c: 0x0E }, cls: 'fn', sub: 'сдвиг' },
+        { t: 'Вx', key: { a: 'code', c: 0x0F }, cls: 'fn', sub: 'обмен' },
+        { t: '↔', key: { a: 'code', c: 0x14 }, cls: 'fn', sub: 'X и Y' },
 
-    { sec: 'Сервис' },
-    { t: 'Сброс', act: 'reset', cls: 'acc wide', sub: 'регистры и программа' },
-    { t: 'CF', key: { a: 'cf' }, cls: 'fn wide', sub: 'снять слой F или K' },
+        { t: '7', key: { a: 'digit', d: 7 } },
+        { t: '8', key: { a: 'digit', d: 8 } },
+        { t: '9', key: { a: 'digit', d: 9 } },
+        { t: '÷', key: { a: 'code', c: 0x13 }, cls: 'acc' },
 
-    { sec: 'Числа' },
-    { t: '7', key: { a: 'digit', d: 7 } },
-    { t: '8', key: { a: 'digit', d: 8 } },
-    { t: '9', key: { a: 'digit', d: 9 } },
-    { t: '÷', key: { a: 'code', c: 0x13 }, cls: 'acc' },
-    { t: '4', key: { a: 'digit', d: 4 } },
-    { t: '5', key: { a: 'digit', d: 5 } },
-    { t: '6', key: { a: 'digit', d: 6 } },
-    { t: '×', key: { a: 'code', c: 0x12 }, cls: 'acc' },
-    { t: '1', key: { a: 'digit', d: 1 } },
-    { t: '2', key: { a: 'digit', d: 2 } },
-    { t: '3', key: { a: 'digit', d: 3 } },
-    { t: '−', key: { a: 'code', c: 0x11 }, cls: 'acc' },
-    { t: '0', key: { a: 'digit', d: 0 } },
-    { t: '•', key: { a: 'dot' }, sub: 'точка' },
-    { t: '/−/', key: { a: 'code', c: 0x0B }, sub: 'знак' },
-    { t: '+', key: { a: 'code', c: 0x10 }, cls: 'acc' },
+        { t: '4', key: { a: 'digit', d: 4 } },
+        { t: '5', key: { a: 'digit', d: 5 } },
+        { t: '6', key: { a: 'digit', d: 6 } },
+        { t: '×', key: { a: 'code', c: 0x12 }, cls: 'acc' },
 
-    { sec: 'Регистры' },
-    { t: 'X→П', key: { a: 'stox' }, cls: 'fn', sub: 'запись' },
-    { t: 'П→x', key: { a: 'loadx' }, cls: 'fn', sub: 'чтение' },
-    { t: 'БП', key: { a: 'bp' }, cls: 'fn', sub: 'безусл.' },
-    { t: 'ПП', key: { a: 'pp' }, cls: 'fn', sub: 'подпрогр.' },
-    { t: 'В/О', key: { a: 'vo' }, cls: 'fn', sub: 'возврат' },
-    { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
-    { t: 'ВП', key: { a: 'code', c: 0x0C }, cls: 'fn', sub: 'порядок' },
+        { t: '1', key: { a: 'digit', d: 1 } },
+        { t: '2', key: { a: 'digit', d: 2 } },
+        { t: '3', key: { a: 'digit', d: 3 } },
+        { t: '−', key: { a: 'code', c: 0x11 }, cls: 'acc' },
 
-    { sec: 'F-функции' },
-    { t: '√', key: { a: 'code', c: 0x21 }, sub: 'F √' },
-    { t: 'x²', key: { a: 'code', c: 0x22 }, sub: 'F x²' },
-    { t: '1/x', key: { a: 'code', c: 0x23 }, sub: 'F 1/x' },
-    { t: 'x^y', key: { a: 'code', c: 0x24 }, sub: 'F x^y' },
-    { t: 'π', key: { a: 'code', c: 0x20 }, sub: 'F π' },
-    { t: 'lg', key: { a: 'code', c: 0x17 }, sub: 'F lg' },
-    { t: 'ln', key: { a: 'code', c: 0x18 }, sub: 'F ln' },
-    { t: 'e^x', key: { a: 'code', c: 0x16 }, sub: 'F e^x' },
-    { t: '10^x', key: { a: 'code', c: 0x15 }, sub: 'F 10^x' },
+        { t: '0', key: { a: 'digit', d: 0 } },
+        { t: '•', key: { a: 'dot' }, sub: 'точка' },
+        { t: '/−/', key: { a: 'code', c: 0x0B }, sub: 'знак' },
+        { t: '+', key: { a: 'code', c: 0x10 }, cls: 'acc' },
 
-    { sec: 'Тригонометрия' },
-    { t: 'sin', key: { a: 'code', c: 0x1C }, sub: 'F sin' },
-    { t: 'cos', key: { a: 'code', c: 0x1D }, sub: 'F cos' },
-    { t: 'tg', key: { a: 'code', c: 0x1E }, sub: 'F tg' },
-    { t: 'sin⁻¹', key: { a: 'code', c: 0x19 }, sub: 'F arcsin' },
-    { t: 'cos⁻¹', key: { a: 'code', c: 0x1A }, sub: 'F arccos' },
-    { t: 'tg⁻¹', key: { a: 'code', c: 0x1B }, sub: 'F arctg' },
+        { t: 'ВП', key: { a: 'code', c: 0x0C }, cls: 'fn', sub: 'порядок' },
+        { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
+        { t: 'ПРГ', key: { a: 'prg' }, cls: 'fn', sub: 'запись' },
+        { t: 'АВТ', key: { a: 'aut' }, cls: 'fn', sub: 'счёт' }
+      ]
+    },
 
-    { sec: 'K-функции' },
-    { t: '|x|', key: { a: 'code', c: 0x31 }, sub: 'K |x|' },
-    { t: 'ЗН', key: { a: 'code', c: 0x32 }, sub: 'K ЗН' },
-    { t: '[x]', key: { a: 'code', c: 0x34 }, sub: 'K [x]' },
-    { t: '{x}', key: { a: 'code', c: 0x35 }, sub: 'K {x}' },
-    { t: 'max', key: { a: 'code', c: 0x36 }, sub: 'K max' },
-    { t: 'СЧ', key: { a: 'code', c: 0x3B }, sub: 'K СЧ' },
-    { t: '°→′', key: { a: 'code', c: 0x26 }, sub: 'K °→′' },
-    { t: '°→′″', key: { a: 'code', c: 0x2A }, sub: 'K °→′″' },
-    { t: '°←′″', key: { a: 'code', c: 0x30 }, sub: 'K °←′″' },
-    { t: '°←′', key: { a: 'code', c: 0x33 }, sub: 'K °←′' }
-  ];
+    f: {
+      title: 'Функции',
+      keys: [
+        { sec: 'F-функции' },
+        { t: '√', key: { a: 'code', c: 0x21 }, sub: 'корень' },
+        { t: 'x²', key: { a: 'code', c: 0x22 }, sub: 'квадрат' },
+        { t: '1/x', key: { a: 'code', c: 0x23 }, sub: 'обратное' },
+        { t: 'x^y', key: { a: 'code', c: 0x24 }, sub: 'степень' },
+
+        { t: 'π', key: { a: 'code', c: 0x20 } },
+        { t: 'lg', key: { a: 'code', c: 0x17 } },
+        { t: 'ln', key: { a: 'code', c: 0x18 } },
+        { t: 'e^x', key: { a: 'code', c: 0x16 } },
+
+        { t: '10^x', key: { a: 'code', c: 0x15 } },
+        { t: 'sin', key: { a: 'code', c: 0x1C } },
+        { t: 'cos', key: { a: 'code', c: 0x1D } },
+        { t: 'tg', key: { a: 'code', c: 0x1E } },
+
+        { t: 'sin⁻¹', key: { a: 'code', c: 0x19 }, sub: 'arcsin' },
+        { t: 'cos⁻¹', key: { a: 'code', c: 0x1A }, sub: 'arccos' },
+        { t: 'tg⁻¹', key: { a: 'code', c: 0x1B }, sub: 'arctg' },
+        { t: '|x|', key: { a: 'code', c: 0x31 }, sub: 'модуль' },
+
+        { sec: 'K-функции' },
+        { t: 'ЗН', key: { a: 'code', c: 0x32 }, sub: 'знак' },
+        { t: '[x]', key: { a: 'code', c: 0x34 }, sub: 'целое' },
+        { t: '{x}', key: { a: 'code', c: 0x35 }, sub: 'дробь' },
+        { t: 'max', key: { a: 'code', c: 0x36 } },
+
+        { t: 'СЧ', key: { a: 'code', c: 0x3B }, sub: 'случайное' },
+        { t: '°→′', key: { a: 'code', c: 0x26 } },
+        { t: '°→′″', key: { a: 'code', c: 0x2A } },
+        { t: '°←′″', key: { a: 'code', c: 0x30 } },
+
+        { t: '°←′', key: { a: 'code', c: 0x33 } }
+      ]
+    },
+
+    reg: {
+      title: 'Регистры',
+      keys: [
+        { sec: 'Обмен с регистрами' },
+        { t: 'X→П', key: { a: 'stox' }, cls: 'fn', sub: 'записать X' },
+        { t: 'П→x', key: { a: 'loadx' }, cls: 'fn', sub: 'прочитать' },
+        { t: 'БП', key: { a: 'bp' }, cls: 'fn', sub: 'переход' },
+        { t: 'ПП', key: { a: 'pp' }, cls: 'fn', sub: 'подпрогр.' },
+
+        { t: 'В/О', key: { a: 'vo' }, cls: 'fn', sub: 'адрес 00' },
+        { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
+        { t: 'CF', key: { a: 'cf' }, cls: 'fn', sub: 'снять выбор' },
+        { t: 'Сброс', act: 'reset', cls: 'acc', sub: 'всё сразу' }
+      ]
+    }
+  };
 
   /* ---------- построение ---------- */
   function build(id) {
@@ -203,7 +234,11 @@
       hasK: p.family !== 'Б3-34',
       onEvent: function (type, data) {
         if (type === 'hint') hintText = data || '';
-        if (type === 'pick-register') hintText = 'Выбери регистр';
+        if (type === 'pick-register') {
+          hintText = 'Выбери регистр';
+          uiLayer = 'reg';          /* выбор регистра сам открывает слой */
+          renderKeys();
+        }
         render();
       }
     });
@@ -214,37 +249,66 @@
     render();
   }
 
-  function renderKeys() {
-    var host = document.getElementById('keys');
+  function switchLayer(name) {
+    uiLayer = name;
+    renderKeys();
+    render();
+  }
+
+  function renderLayers() {
+    var host = document.getElementById('layers');
     var html = '';
-    for (var i = 0; i < KEYS.length; i++) {
-      var k = KEYS[i];
+    var order = ['main', 'f', 'reg'];
+    for (var i = 0; i < order.length; i++) {
+      var id = order[i];
+      html += '<button class="lay' + (uiLayer === id ? ' on' : '') + '" data-lay="' + id + '">' +
+              LAYERS[id].title + '</button>';
+    }
+    host.innerHTML = html;
+  }
+
+  function renderKeys() {
+    renderLayers();
+    var host = document.getElementById('keys');
+    var list = LAYERS[uiLayer].keys;
+    var html = '';
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i];
       if (k.sec) { html += '<div class="sec">' + k.sec + '</div>'; continue; }
       html += '<button class="k ' + (k.cls || '') + '" data-i="' + i + '">' + k.t +
               (k.sub ? '<small>' + k.sub + '</small>' : '') + '</button>';
     }
     host.innerHTML = html;
-    host.addEventListener('click', function (e) {
-      var b = e.target.closest('.k');
-      if (!b) return;
-      var item = KEYS[+b.dataset.i];
-      if (!item) return;
-      hintText = '';
-      if (item.act === 'reset') { core.resetAll(); render(); return; }
-      if (!item.key) return;
-      core.key(item.key);
-      render();
-    });
   }
+
+  /* клик по клавише: один обработчик на весь блок, переживает перерисовку */
+  document.getElementById('keys').addEventListener('click', function (e) {
+    var b = e.target.closest('.k');
+    if (!b || !core) return;
+    var item = LAYERS[uiLayer].keys[+b.dataset.i];
+    if (!item || item.sec) return;
+    hintText = '';
+    if (item.act === 'reset') { core.resetAll(); switchLayer('main'); return; }
+    if (!item.key) return;
+    core.key(item.key);
+    /* как у оригинала: после клавиши слой снимается */
+    if (uiLayer !== 'main' && core.ST.await !== 'reg') switchLayer('main');
+    else render();
+  });
+
+  document.getElementById('layers').addEventListener('click', function (e) {
+    var b = e.target.closest('.lay');
+    if (!b) return;
+    switchLayer(b.dataset.lay);
+  });
 
   function renderRegs() {
     var host = document.getElementById('regs');
     var html = '';
     for (var r = 0; r < core.REG_COUNT; r++) {
       var name = core.REG_NAMES[r];
-      var n = (core.ST.await === 'reg' && core.ST.kind === 0x40 && r === 0) ? 'nz' : 'n';
       html += '<div class="reg" data-r="' + r + '">' +
-              '<div class="' + n + '">R' + name + '</div>' +
+              '<div class="n">R' + name + '</div>' +
               '<div class="v" id="rv' + r + '">0</div></div>';
     }
     host.innerHTML = html;
@@ -271,13 +335,15 @@
   }
 
   function render() {
+    if (!core) return;
     var ST = core.ST;
     var d = document.getElementById('disp');
     d.textContent = dispText();
     d.classList.toggle('err', !!ST.err);
 
-    document.getElementById('iF').classList.toggle('on', ST.layer === 'f');
+    document.getElementById('iF').classList.toggle('on', uiLayer === 'f' || ST.layer === 'f');
     document.getElementById('iK').classList.toggle('on', ST.layer === 'k');
+    document.getElementById('iR').classList.toggle('on', uiLayer === 'reg');
     document.getElementById('iPRG').classList.toggle('on', ST.mode === 'PRG');
     document.getElementById('iERR').classList.toggle('on', !!ST.err);
     var ang = document.getElementById('iANG');
@@ -287,8 +353,12 @@
     document.getElementById('pos').textContent =
       core.addrShow(ST.ip) + ' · ' + (ST.mode === 'PRG' ? 'ПРГ' : 'АВТ');
 
-    var hint = document.getElementById('hint');
-    hint.textContent = hintText;
+    document.getElementById('hint').textContent = hintText;
+
+    /* регистры на виду только в своём слое или когда идёт выбор регистра */
+    var rbox = document.getElementById('regs');
+    var needRegs = (uiLayer === 'reg') || ST.await === 'reg';
+    rbox.classList.toggle('hide', !needRegs);
 
     for (var r = 0; r < core.REG_COUNT; r++) {
       var el = document.getElementById('rv' + r);
@@ -298,9 +368,14 @@
     for (var i = 0; i < cells.length; i++) {
       cells[i].classList.toggle('act', ST.await === 'reg');
     }
+
+    var lays = document.querySelectorAll('.lay');
+    for (var j = 0; j < lays.length; j++) {
+      lays[j].classList.toggle('on', lays[j].dataset.lay === uiLayer);
+    }
   }
 
-  /* клавиатура компьютера — по желанию, основное всё равно пальцем */
+  /* клавиатура компьютера — слои на F и R, как быстрый доступ */
   document.addEventListener('keydown', function (e) {
     if (!core) return;
     var c = e.key;
@@ -312,6 +387,8 @@
     if (c === '/') { core.key({ a: 'code', c: 0x13 }); render(); e.preventDefault(); return; }
     if (c === 'Enter') { core.key({ a: 'sp' }); render(); e.preventDefault(); return; }
     if (c === 'Escape') { core.key({ a: 'code', c: 0x0D }); render(); e.preventDefault(); return; }
+    if (c === 'f' || c === 'F' || c === 'а' || c === 'А') { switchLayer(uiLayer === 'f' ? 'main' : 'f'); e.preventDefault(); return; }
+    if (c === 'r' || c === 'R' || c === 'к' || c === 'К') { switchLayer(uiLayer === 'reg' ? 'main' : 'reg'); e.preventDefault(); return; }
   });
 
   renderKeys();
