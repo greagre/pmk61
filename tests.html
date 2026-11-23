@@ -63,8 +63,8 @@
   Если таблица не заполнилась — проверь, что рядом лежат <span class="hex">core.js</span> и <span class="hex">profiles.js</span>.
 </div>
 
-<script src="core.js?v=9"></script>
-<script src="profiles.js?v=9"></script>
+<script src="core.js?v=10"></script>
+<script src="profiles.js?v=10"></script>
 <script>
 (function () {
   'use strict';
@@ -122,7 +122,7 @@
     { name: 'K x≥0 при X = 5: истина', prog: [0x90, 0x22, 0x50], regs: { 1: 5 }, x: 5, expect: { x: 25 } },
     { name: 'K x<0 при X = 0: ложь', prog: [0x0D, 0xC1, 0x22, 0x07, 0x50], regs: { 1: 4 }, expect: { x: 7 } },
     { name: 'K x<0 при X = −5: истина', prog: [0xC1, 0x22, 0x50], regs: { 1: 4 }, x: -5, expect: { x: 25 } },
-    { name: 'K x=0 при X = 0: истина', prog: [0x0D, 0xE1, 0x22, 0x07, 0x50], regs: { 1: 4 }, expect: { x: 0 } },
+    { name: 'K x=0 при X = 0: истина, адрес не воспринимается', prog: [0x0D, 0xE1, 0x01, 0x50], regs: { 1: 4 }, expect: { x: 1 }, about: 'истина → ip + 1, сразу цифра 1 → X = 1; при лжи было бы modAddr(4, 1) = 3 и X = 0' },
     { name: 'K x=0 при X = 5: ложь', prog: [0x05, 0xE1, 0x22, 0x0D, 0x50], regs: { 1: 4 }, expect: { x: 0 } },
 
     /* ---- циклы L1–L3 ---- */
@@ -137,7 +137,7 @@
     { name: '↔: обмен X и Y', prog: [0x02, 0x0E, 0x03, 0x14, 0x50], expect: { x: 2 } },
     { name: '10^x при X = 2', prog: [0x02, 0x15, 0x50], expect: { x: 100 } },
     { name: 'e^x при X = 1', prog: [0x01, 0x16, 0x50], expect: { x: 2.7182818 } },
-    { name: 'lg 100 = 2', prog: [0x01, 0x00, 0x17, 0x50], expect: { x: 2 } },
+    { name: 'lg 100 = 2', prog: [0x01, 0x00, 0x00, 0x17, 0x50], expect: { x: 2 }, about: 'вводится 100: цифры 1, 0, 0' },
     { name: 'ln после e^x возвращает 1', prog: [0x01, 0x16, 0x18, 0x50], expect: { x: 1 } },
     { name: 'π', prog: [0x20, 0x50], expect: { x: 3.1415927 } },
     { name: '√9 = 3', prog: [0x09, 0x21, 0x50], expect: { x: 3 } },
