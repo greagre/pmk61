@@ -28,13 +28,14 @@
   .err { color: var(--bad); font-weight:600; }
   .hintbox { background:#eef4ff; border:1px solid #c4d6f5; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
   .debt { background:#f4f1fb; border:1px solid #cdc2ec; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
+  .done { background:#eef8f0; border:1px solid #bfe0c6; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
   .warn { background:#fff3cd; border:1px solid #e0c068; border-radius:10px; padding:10px 12px; margin:0 0 14px; font-size:13px; }
 </style>
 </head>
 <body>
 
 <h1>pmk61 — тесты библиотеки</h1>
-<div class="sub">Проверяется <span class="hex">library.js</span>: «Перед пуском», выгрузка TXT, разбор TXT при импорте, сохранение и возврат программы вместе с регистрами, X и углом. Ядро проверяется отдельно — <a href="tests.html">tests.html</a>.</div>
+<div class="sub">Проверяется <span class="hex">library.js</span> ревизии 2: «Перед пуском», выгрузка TXT, разбор TXT при импорте, сохранение и возврат программы вместе с регистрами, X и углом. Ядро проверяется отдельно — <a href="tests.html">tests.html</a>.</div>
 
 <div class="hintbox">
   <b>Что считается правильным.</b> Ожидания записаны по договорённостям 34-го проекта:
@@ -42,10 +43,10 @@
   десятичный код и подпись команды; загрузка возвращает программу, регистры, X и угол.
 </div>
 
-<div class="debt">
-  <b>Известные долги библиотеки (в счёт не входят):</b><br>
-  1. Коды <span class="hex">4F</span> и <span class="hex">6F</span> в «Перед пуском» считаются регистром 15, а не R0.<br>
-  2. TXT хранит «Результат на момент сохранения: X = …», но <span class="hex">fromText</span> его не читает — при импорте X не возвращается.
+<div class="done">
+  <b>Долгов нет.</b> Закрыты оба прежних:<br>
+  1. Коды <span class="hex">4F</span> и <span class="hex">6F</span> теперь адресуют R0 — младшая цифра F нормализуется до сверки с профилем.<br>
+  2. X возвращается из TXT — строка «Результат на момент сохранения» пишется всегда и читается обратно.
 </div>
 
 <div id="stale"></div>
@@ -60,19 +61,20 @@
 
 <div class="note">
   Прогон идёт в браузере, ничего никуда не отправляется. Рядом должны лежать
-  <span class="hex">core.js</span>, <span class="hex">profiles.js</span>, <span class="hex">library.js</span>
-  и <span class="hex">library-cases.js</span>.
+  <span class="hex">core.js</span>, <span class="hex">profiles.js</span>, <span class="hex">library.js</span> ревизии 2
+  и <span class="hex">library-cases.js</span> ревизии 3.
 </div>
 
 <script src="core.js?v=11"></script>
 <script src="profiles.js?v=11"></script>
-<script src="library.js?v=1"></script>
-<script src="library-cases.js?v=1"></script>
+<script src="library.js?v=2"></script>
+<script src="library-cases.js?v=3"></script>
 <script>
 (function () {
   'use strict';
 
   var CASES = window.LIB_CASES || [];
+  var NEED_LIB = 2;
 
   function checkFresh() {
     var el = document.getElementById('stale');
@@ -84,9 +86,15 @@
         'Нужны core.js, profiles.js, library.js и library-cases.js рядом с этой страницей.</div>';
       return false;
     }
-    if (window.PMK61Lib.version !== 1) bad.push('версия библиотеки: ' + window.PMK61Lib.version + ', ожидалась 1');
+    if (window.PMK61Lib.version !== NEED_LIB) {
+      bad.push('версия библиотеки: ' + window.PMK61Lib.version + ', ожидалась ' + NEED_LIB);
+    }
+    if (CASES.length !== 39) {
+      bad.push('кейсов загружено: ' + CASES.length + ', ожидалось 39 — значение кэшировано');
+    }
     if (!window.MKProfiles.get('mk-61')) bad.push('нет профиля mk-61');
-    if (bad.length) el.innerHTML = '<div class="warn"><b>Старая копия файлов.</b><br>' + bad.join('<br>') + '</div>';
+    if (bad.length) el.innerHTML = '<div class="warn"><b>Старая копия файлов в кэше браузера.</b><br>' +
+      bad.join('<br>') + '<br>Потяни страницу вниз для перезагрузки или открой в приватном окне.</div>';
     return true;
   }
 
@@ -140,6 +148,7 @@
 
     var txt = 'Пройдено ' + passed + ' из ' + total;
     if (debt) txt += ' · долг: ' + debtLeft + ' из ' + debt;
+    else txt += ' · долгов нет';
     summary.className = passed === total ? 'pass' : 'fail';
     summary.textContent = txt;
   }
