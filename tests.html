@@ -52,8 +52,8 @@
   Если таблица не заполнилась — проверь, что рядом лежат <span class="hex">core.js</span> и <span class="hex">profiles.js</span>.
 </div>
 
-<script src="core.js"></script>
-<script src="profiles.js"></script>
+<script src="core.js?v=6"></script>
+<script src="profiles.js?v=6"></script>
 <script>
 (function () {
   'use strict';
@@ -78,7 +78,18 @@
     { name: 'K max: Y = 5, X = 0',        prog: [0x05, 0x0E, 0x00, 0x36, 0x50], expect: 0 },
     { name: 'K →°′″ при X = 1.523',       prog: [0x2A, 0x50], x: 1.523, expect: 1.875, tol: 1e-9 },
     { name: 'K ←°′″ при X = 1,875',       prog: [0x30, 0x50], x: 1.875, expect: 1.523, tol: 1e-9 },
-    { name: 'Стоп по С/П',                prog: [0x05, 0x50], expect: 5 }
+    { name: 'Стоп по С/П',                prog: [0x05, 0x50], expect: 5 },
+
+    /* ---- Переходы и подпрограммы ---- */
+    { name: 'БП вперёд занимает три ячейки', prog: [0x51, 0x04, 0x00, 0x09, 0x07, 0x50], expect: 7 },
+    { name: 'ПП → В/О: возврат на ip + 3',   prog: [0x07, 0x53, 0x05, 0x00, 0x50, 0x52], expect: 7 },
+    { name: 'Два вложенных ПП',              prog: [0x07, 0x53, 0x05, 0x00, 0x50, 0x53, 0x09, 0x00, 0x52, 0x52], expect: 7 },
+    { name: 'Шестой вложенный ПП — ЕГГОГ',   prog: [0x53, 0x00, 0x00], expectError: true },
+    { name: 'F L0: пять итераций назад',     prog: [0x05, 0x40, 0x0D, 0x01, 0x10, 0x5D, 0x03, 0x00, 0x50], expect: 5 },
+    { name: 'К БП: модификация адреса в R1', prog: [0x05, 0x41, 0x81, 0x09, 0x07, 0x50], expect: 7 },
+    { name: 'К ПП: возврат из косвенного',   prog: [0x05, 0x41, 0xA1, 0x50, 0x52], expect: 5 },
+    { name: 'F x≥0 при X = 0: истина',       prog: [0x0D, 0x59, 0x05, 0x00, 0x50, 0x07, 0x50], expect: 0 },
+    { name: 'F x<0 при X = 0: ложь',         prog: [0x0D, 0x5C, 0x05, 0x00, 0x50, 0x07, 0x50], expect: 7 }
   ];
 
   /* Отдельные проверки, которым нужен не прогон, а прямой вызов API. */
@@ -107,6 +118,16 @@
         ct.setProgram([0x51, 0x0A, 0x04]);
         var got = ct.jumpAddr(0);
         return { ok: got === 104, fact: String(got) };
+      }
+    },
+    {
+      name: 'БП: адрес 12 из двух ячеек',
+      prog: [0x51, 0x01, 0x02],
+      run: function () {
+        var ct = MKCore.create(MKProfiles.get(MODEL));
+        ct.setProgram([0x51, 0x01, 0x02]);
+        var got = ct.jumpAddr(0);
+        return { ok: got === 12, fact: String(got) };
       }
     },
     {
