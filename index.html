@@ -2,401 +2,191 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>МК-61 — эмулятор</title>
-<style>
-  :root{
-    --case:#2b2f36; --case2:#3a3f48; --key:#4a505b; --key2:#3c424c;
-    --fn:#5a6270; --acc:#e8b64c; --screen:#b9c9a8; --ink:#1b2114;
-  }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{
-    margin:0;padding:14px 10px 28px;background:#15181d;
-    font-family:-apple-system,Roboto,"Segoe UI",sans-serif;color:#e8eaee;
-    display:flex;justify-content:center;
-  }
-  .case{
-    width:100%;max-width:430px;background:linear-gradient(180deg,var(--case2),var(--case));
-    border-radius:22px;padding:14px 12px 16px;
-    box-shadow:0 18px 40px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.08);
-  }
-  .brand{display:flex;justify-content:space-between;align-items:center;margin:0 4px 10px}
-  .brand b{font-size:15px;letter-spacing:.14em;color:#f0e2bd}
-  .brand span{font-size:11px;color:#9aa1ad;letter-spacing:.06em}
-  .screen{
-    background:linear-gradient(180deg,#c8d6b8,var(--screen));
-    border-radius:10px;padding:8px 10px 7px;color:var(--ink);
-    box-shadow:inset 0 3px 10px rgba(0,0,0,.45);
-  }
-  .indic{display:flex;gap:8px;font-size:10px;letter-spacing:.08em;
-    font-family:ui-monospace,Menlo,monospace;height:12px;opacity:.85}
-  .indic i{font-style:normal;opacity:.18}
-  .indic i.on{opacity:1;font-weight:700}
-  .digits{
-    font-family:ui-monospace,"Courier New",monospace;font-weight:700;
-    font-size:26px;text-align:right;line-height:1.25;min-height:34px;
-    overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
-  }
-  .digits.err{color:#8a1414}
-  .status{font-family:ui-monospace,monospace;font-size:10px;opacity:.72;
-    display:flex;justify-content:space-between;gap:8px;margin-top:1px}
-  .status .hint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;flex:1}
-  .regs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:10px 0 8px}
-  .regs.hide{display:none}
-  .reg{
-    background:rgba(0,0,0,.24);border:1px solid rgba(255,255,255,.07);
-    border-radius:7px;padding:4px 3px 3px;text-align:center;cursor:pointer;
-    transition:background .12s,border-color .12s;
-  }
-  .reg.act{border-color:var(--acc);background:rgba(232,182,76,.16)}
-  .reg .n{font-size:9px;color:#98a0ac;letter-spacing:.06em}
-  .reg .nz{font-size:9px;color:var(--acc);letter-spacing:.06em}
-  .reg .v{font-family:ui-monospace,monospace;font-size:11px;color:#dfe4ec;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .keys{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-  .k{
-    appearance:none;border:0;border-radius:9px;padding:11px 2px 9px;
-    background:linear-gradient(180deg,var(--key),var(--key2));color:#f2f4f8;
-    font-size:13px;font-weight:600;cursor:pointer;
-    box-shadow:0 2px 0 rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.09);
-    transition:transform .06s,box-shadow .06s;
-  }
-  .k:active{transform:translateY(2px);box-shadow:none}
-  .k small{display:block;font-size:8px;font-weight:500;opacity:.62;margin-top:1px}
-  .k.fn{background:linear-gradient(180deg,var(--fn),#464c57);font-size:12px}
-  .k.acc{background:linear-gradient(180deg,#c99b39,#a87d26);color:#1c1608}
-  .k.wide{grid-column:span 2}
-  .sep{grid-column:1/-1;height:1px;background:rgba(255,255,255,.07);margin:5px 0}
-  .sec{grid-column:1/-1;font-size:10px;letter-spacing:.1em;color:#8e96a3;
-    text-transform:uppercase;margin:6px 2px 0}
-  .layers{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:9px 0 2px}
-  .lay{
-    appearance:none;border:1px solid rgba(255,255,255,.1);border-radius:8px;
-    background:rgba(0,0,0,.22);color:#aeb6c2;font-size:11px;font-weight:600;
-    letter-spacing:.04em;padding:7px 2px;cursor:pointer;transition:background .12s,color .12s,border-color .12s;
-  }
-  .lay.on{background:rgba(232,182,76,.18);border-color:var(--acc);color:#f0d79b}
-  .foot{margin:14px 6px 0;font-size:11px;color:#8e96a3;text-align:center;line-height:1.6}
-  .foot a{color:#c9b070}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#d7d3c4">
+<title>ЭЛЕКТРОНИКА МК-61 — эмулятор</title>
+<link rel="stylesheet" href="layout.css?v=1">
 </head>
-<body>
-<div class="case">
-  <div class="brand"><b>МК-61</b><span id="modelTag"></span></div>
-
-  <div class="screen">
-    <div class="indic">
-      <i id="iF">F</i><i id="iK">K</i><i id="iR">R</i><i id="iPRG">ПРГ</i><i id="iANG">ГРД</i><i id="iERR">ЕГГ0Г</i>
-    </div>
-    <div class="digits" id="disp">0</div>
-    <div class="status">
-      <span id="pos">00 · АВТ</span>
-      <span class="hint" id="hint"></span>
-    </div>
+<body data-theme="classic" data-mode="study" data-tab="num">
+<div class="app">
+  <div class="top">
+    <label for="model">Модель</label>
+    <select id="model" aria-label="Модель калькулятора"></select>
+    <button type="button" class="topbtn" id="themeBtn" title="Тема">▤</button>
   </div>
 
-  <div class="layers" id="layers"></div>
-  <div class="regs hide" id="regs"></div>
-  <div class="keys" id="keys"></div>
+  <div class="calc">
+    <div class="brand"><span>ЭЛЕКТРОНИКА</span><span id="modelName">МК-61</span></div>
+
+    <div class="screen">
+      <div class="lcd" id="lcd">0</div>
+      <div class="lcd-sub">
+        <span>режим: <b id="stMode">АВТ</b></span>
+        <span>слой: <b id="stLayer">—</b></span>
+        <span>угол: <b id="stAngle">Г</b></span>
+        <span>адрес: <b id="stStep">00</b></span>
+      </div>
+    </div>
+
+    <div class="angseg" id="angseg" role="group" aria-label="Единица измерения угла, как переключатель Р-ГРД-Г">
+      <span class="anglab">угол</span>
+      <button type="button" data-angle="deg" title="Градусы — полный оборот 360">Г</button>
+      <button type="button" data-angle="grad" title="Грады — полный оборот 400">ГРД</button>
+      <button type="button" data-angle="rad" title="Радианы — полный оборот 2π">Р</button>
+    </div>
+
+    <button type="button" class="progtag" id="progTag" hidden>
+      <span class="ptag-num" id="progTagNum">01</span>
+      <span class="ptag-name" id="progTagName">n! — факториал</span>
+      <span class="ptag-go">☰</span>
+    </button>
+
+    <div class="keys" id="keys"></div>
+
+    <div class="service" id="service"></div>
+
+    <div class="tempo study-only" id="tempoRow">
+      <span>Темп</span>
+      <select id="tempo" aria-label="Темп автоматического шага">
+        <option value="1">1 с</option>
+        <option value="2" selected>2 с</option>
+        <option value="5">5 с</option>
+        <option value="10">10 с</option>
+        <option value="0">вручную</option>
+      </select>
+    </div>
+
+    <div class="status study-only" id="status"></div>
+
+    <div class="tabs study-only" id="tabs">
+      <button type="button" data-tab="num">Числа</button>
+      <button type="button" data-tab="regs">Регистры</button>
+      <button type="button" data-tab="code">Код</button>
+      <button type="button" data-tab="log">Журнал</button>
+    </div>
+
+    <div class="tabpane study-only" id="tabNum">
+      <div class="stack" id="stack"></div>
+    </div>
+
+    <div class="tabpane regs study-only" id="tabRegs"></div>
+
+    <div class="tabpane study-only" id="tabCode">
+      <div class="prog" id="prog"></div>
+    </div>
+
+    <div class="tabpane study-only" id="tabLog">
+      <div class="logbox">
+        <div class="loghead">
+          <span>Журнал шагов · <b id="logCount">0</b></span>
+          <button type="button" id="logClear">Очистить</button>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <div class="hint" id="hint">Готово. Клавиша f открывает второй слой, k — слой К: K-функции и косвенные команды МК-61.</div>
+  </div>
+
+  <div class="modeseg" id="modeseg">
+    <button type="button" data-mode="work">Работа</button>
+    <button type="button" data-mode="study">Учёба</button>
+  </div>
 
   <div class="foot">
-    Три экрана клавиатуры: <b>Числа</b> · <b>Функции</b> · <b>Регистры</b>.<br>
-    После любой клавиши возврат на <b>Числа</b>, как снятие слоя у оригинала.<br>
-    <b>Сброс</b> гасит регистры и программу; сохранённые в библиотеке остаются.<br>
-    <a href="tests.html">контрольные тесты</a>
+    <a href="tests.html">Проверка ядра МК-61</a> ·
+    <a href="tests-library.html">Проверка библиотеки</a>
   </div>
 </div>
 
-<script src="profiles.js?v=12"></script>
-<script src="core.js?v=12"></script>
-<!-- слой ввода: правки клавиатуры идут в core-keys.js, ядро core.js не трогаем -->
-<script src="core-keys.js?v=4"></script>
-<!-- библиотека программ: сохранение вместе с регистрами, загрузка, TXT/JSON -->
-<script src="library.js?v=1"></script>
-<!-- конвертер каталога: файлы {addr,hex,cmd} → коды, загрузка по ссылке, блокировка partial -->
-<script src="convert61.js?v=1"></script>
 <script>
 (function () {
-  'use strict';
+  var KEY = 'pmk61/theme';
+  var ORDER = ['classic', 'light', 'dark'];
+  var ICON = { classic: '▤', light: '☀', dark: '☾' };
+  var NAME = { classic: 'классика — бежевый корпус', light: 'светлая', dark: 'тёмная' };
+  var META = { classic: '#d7d3c4', light: '#eef1f6', dark: '#15181b' };
+  var btn = document.getElementById('themeBtn');
+  var meta = document.querySelector('meta[name="theme-color"]');
 
-  var models = MKProfiles.listStable();
-  var modelId = localStorage.getItem('pmk61/model') || MKProfiles.DEFAULT_MODEL;
-  if (!MKProfiles.get(modelId)) modelId = MKProfiles.DEFAULT_MODEL;
+  function apply(theme) {
+    if (ORDER.indexOf(theme) < 0) theme = 'classic';
+    document.body.dataset.theme = theme;
+    btn.textContent = ICON[theme];
+    btn.title = 'Тема: ' + NAME[theme] + ' — нажми, чтобы сменить';
+    if (meta) meta.setAttribute('content', META[theme]);
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+  }
 
-  var core = null;
-  var hintText = '';
-  var uiLayer = 'main';
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  apply(saved && ORDER.indexOf(saved) >= 0 ? saved : 'classic');
 
-  /* ---------- три экрана клавиатуры ----------
-     Экраны — это только представление. Слой ядра (ST.layer) не трогаем:
-     у оригинала он значит «следующая клавиша — функция», а здесь функции
-     и так лежат своими кнопками. Но индикатор F/R показывает, где мы. */
-  var LAYERS = {
-    main: {
-      title: 'Числа',
-      keys: [
-        { t: 'Cx', key: { a: 'code', c: 0x0D }, cls: 'fn', sub: 'гасит X' },
-        { t: 'В↑', key: { a: 'code', c: 0x0E }, cls: 'fn', sub: 'сдвиг' },
-        { t: 'Вx', key: { a: 'code', c: 0x0F }, cls: 'fn', sub: 'обмен' },
-        { t: '↔', key: { a: 'code', c: 0x14 }, cls: 'fn', sub: 'X и Y' },
+  btn.addEventListener('click', function () {
+    var cur = document.body.dataset.theme || 'classic';
+    var i = ORDER.indexOf(cur);
+    apply(ORDER[(i + 1) % ORDER.length]);
+  });
+})();
+</script>
 
-        { t: '7', key: { a: 'digit', d: 7 } },
-        { t: '8', key: { a: 'digit', d: 8 } },
-        { t: '9', key: { a: 'digit', d: 9 } },
-        { t: '÷', key: { a: 'code', c: 0x13 }, cls: 'acc' },
+<script src="core.js?v=13"></script>
+<script src="profiles.js?v=13"></script>
+<script src="profiles-ui.js?v=1"></script>
+<script src="ui.js?v=1"></script>
 
-        { t: '4', key: { a: 'digit', d: 4 } },
-        { t: '5', key: { a: 'digit', d: 5 } },
-        { t: '6', key: { a: 'digit', d: 6 } },
-        { t: '×', key: { a: 'code', c: 0x12 }, cls: 'acc' },
+<script>
+/* Переключатель угла Р-ГРД-Г — как в 34-й:
+   ui.js про угол ничего не знает, ядро отдаёт setAngle/getAngle,
+   здесь только кнопки и память. */
+(function () {
+  var KEY = 'pmk61/angle';
+  var MARK = { deg: 'Г', grad: 'ГРД', rad: 'Р' };
+  var WORD = { deg: 'градусы', grad: 'грады', rad: 'радианы' };
+  var seg = document.getElementById('angseg');
+  var mark = document.getElementById('stAngle');
+  var cur = 'deg';
+  if (!seg) return;
 
-        { t: '1', key: { a: 'digit', d: 1 } },
-        { t: '2', key: { a: 'digit', d: 2 } },
-        { t: '3', key: { a: 'digit', d: 3 } },
-        { t: '−', key: { a: 'code', c: 0x11 }, cls: 'acc' },
+  function core() {
+    return (window.MKUI && window.MKUI.getCore) ? window.MKUI.getCore() : null;
+  }
 
-        { t: '0', key: { a: 'digit', d: 0 } },
-        { t: '•', key: { a: 'dot' }, sub: 'точка' },
-        { t: '/−/', key: { a: 'code', c: 0x0B }, sub: 'знак' },
-        { t: '+', key: { a: 'code', c: 0x10 }, cls: 'acc' },
-
-        { t: 'ВП', key: { a: 'code', c: 0x0C }, cls: 'fn', sub: 'порядок' },
-        { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
-        { t: 'ПРГ', key: { a: 'prg' }, cls: 'fn', sub: 'запись' },
-        { t: 'АВТ', key: { a: 'aut' }, cls: 'fn', sub: 'счёт' }
-      ]
-    },
-
-    f: {
-      title: 'Функции',
-      keys: [
-        { sec: 'F-функции' },
-        { t: '√', key: { a: 'code', c: 0x21 }, sub: 'корень' },
-        { t: 'x²', key: { a: 'code', c: 0x22 }, sub: 'квадрат' },
-        { t: '1/x', key: { a: 'code', c: 0x23 }, sub: 'обратное' },
-        { t: 'x^y', key: { a: 'code', c: 0x24 }, sub: 'степень' },
-
-        { t: 'π', key: { a: 'code', c: 0x20 } },
-        { t: 'lg', key: { a: 'code', c: 0x17 } },
-        { t: 'ln', key: { a: 'code', c: 0x18 } },
-        { t: 'e^x', key: { a: 'code', c: 0x16 } },
-
-        { t: '10^x', key: { a: 'code', c: 0x15 } },
-        { t: 'sin', key: { a: 'code', c: 0x1C } },
-        { t: 'cos', key: { a: 'code', c: 0x1D } },
-        { t: 'tg', key: { a: 'code', c: 0x1E } },
-
-        { t: 'sin⁻¹', key: { a: 'code', c: 0x19 }, sub: 'arcsin' },
-        { t: 'cos⁻¹', key: { a: 'code', c: 0x1A }, sub: 'arccos' },
-        { t: 'tg⁻¹', key: { a: 'code', c: 0x1B }, sub: 'arctg' },
-        { t: '|x|', key: { a: 'code', c: 0x31 }, sub: 'модуль' },
-
-        { sec: 'K-функции' },
-        { t: 'ЗН', key: { a: 'code', c: 0x32 }, sub: 'знак' },
-        { t: '[x]', key: { a: 'code', c: 0x34 }, sub: 'целое' },
-        { t: '{x}', key: { a: 'code', c: 0x35 }, sub: 'дробь' },
-        { t: 'max', key: { a: 'code', c: 0x36 } },
-
-        { t: 'СЧ', key: { a: 'code', c: 0x3B }, sub: 'случайное' },
-        { t: '°→′', key: { a: 'code', c: 0x26 } },
-        { t: '°→′″', key: { a: 'code', c: 0x2A } },
-        { t: '°←′″', key: { a: 'code', c: 0x30 } },
-
-        { t: '°←′', key: { a: 'code', c: 0x33 } }
-      ]
-    },
-
-    reg: {
-      title: 'Регистры',
-      keys: [
-        { sec: 'Обмен с регистрами' },
-        { t: 'X→П', key: { a: 'stox' }, cls: 'fn', sub: 'записать X' },
-        { t: 'П→x', key: { a: 'loadx' }, cls: 'fn', sub: 'прочитать' },
-        { t: 'БП', key: { a: 'bp' }, cls: 'fn', sub: 'переход' },
-        { t: 'ПП', key: { a: 'pp' }, cls: 'fn', sub: 'подпрогр.' },
-
-        { t: 'В/О', key: { a: 'vo' }, cls: 'fn', sub: 'адрес 00' },
-        { t: 'С/П', key: { a: 'sp' }, cls: 'acc', sub: 'пуск/стоп' },
-        { t: 'CF', key: { a: 'cf' }, cls: 'fn', sub: 'снять выбор' },
-        { t: 'Сброс', act: 'reset', cls: 'acc', sub: 'всё сразу' }
-      ]
-    }
-  };
-
-  /* ---------- построение ---------- */
-  function build(id) {
-    var p = MKProfiles.get(id);
-    if (!p) return;
-    core = MKCore.create({
-      progLen: p.progLen,
-      regCount: p.regCount,
-      nop: p.nop,
-      maxDig: p.maxDig,
-      addrHigh: !!p.addrHigh,
-      addrHighFirst: p.addrHighFirst,
-      addrHighLast: p.addrHighLast,
-      hasK: p.family !== 'Б3-34',
-      onEvent: function (type, data) {
-        if (type === 'hint') hintText = data || '';
-        if (type === 'pick-register') {
-          hintText = 'Выбери регистр';
-          uiLayer = 'reg';          /* выбор регистра сам открывает слой */
-          renderKeys();
-        }
-        render();
-      }
+  function paint() {
+    Array.prototype.forEach.call(seg.querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', b.dataset.angle === cur);
     });
-    modelId = id;
-    localStorage.setItem('pmk61/model', id);
-    document.getElementById('modelTag').textContent = p.title;
-    renderRegs();
-    render();
+    if (mark) mark.textContent = MARK[cur];
+    seg.title = 'Угол: ' + WORD[cur];
   }
 
-  function switchLayer(name) {
-    uiLayer = name;
-    renderKeys();
-    render();
-  }
-
-  function renderLayers() {
-    var host = document.getElementById('layers');
-    var html = '';
-    var order = ['main', 'f', 'reg'];
-    for (var i = 0; i < order.length; i++) {
-      var id = order[i];
-      html += '<button class="lay' + (uiLayer === id ? ' on' : '') + '" data-lay="' + id + '">' +
-              LAYERS[id].title + '</button>';
+  function apply(mode, silent) {
+    if (!MARK[mode]) mode = 'deg';
+    cur = mode;
+    try { localStorage.setItem(KEY, mode); } catch (e) {}
+    var c = core();
+    if (c && c.setAngle) c.setAngle(mode);
+    paint();
+    if (!silent && window.MKUI && window.MKUI.hint) {
+      window.MKUI.hint('Угол: ' + WORD[mode] + ' — sin, cos, tg и обратные считаются в этих единицах');
     }
-    host.innerHTML = html;
   }
 
-  function renderKeys() {
-    renderLayers();
-    var host = document.getElementById('keys');
-    var list = LAYERS[uiLayer].keys;
-    var html = '';
-    for (var i = 0; i < list.length; i++) {
-      var k = list[i];
-      if (k.sec) { html += '<div class="sec">' + k.sec + '</div>'; continue; }
-      html += '<button class="k ' + (k.cls || '') + '" data-i="' + i + '">' + k.t +
-              (k.sub ? '<small>' + k.sub + '</small>' : '') + '</button>';
-    }
-    host.innerHTML = html;
-  }
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  apply(saved && MARK[saved] ? saved : 'deg', true);
 
-  /* клик по клавише: один обработчик на весь блок, переживает перерисовку */
-  document.getElementById('keys').addEventListener('click', function (e) {
-    var b = e.target.closest('.k');
-    if (!b || !core) return;
-    var item = LAYERS[uiLayer].keys[+b.dataset.i];
-    if (!item || item.sec) return;
-    hintText = '';
-    if (item.act === 'reset') { core.resetAll(); switchLayer('main'); return; }
-    if (!item.key) return;
-    core.key(item.key);
-    /* как у оригинала: после клавиши слой снимается */
-    if (uiLayer !== 'main' && core.ST.await !== 'reg') switchLayer('main');
-    else render();
+  seg.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-angle]');
+    if (b) apply(b.dataset.angle);
   });
 
-  document.getElementById('layers').addEventListener('click', function (e) {
-    var b = e.target.closest('.lay');
-    if (!b) return;
-    switchLayer(b.dataset.lay);
-  });
-
-  function renderRegs() {
-    var host = document.getElementById('regs');
-    var html = '';
-    for (var r = 0; r < core.REG_COUNT; r++) {
-      var name = core.REG_NAMES[r];
-      html += '<div class="reg" data-r="' + r + '">' +
-              '<div class="n">R' + name + '</div>' +
-              '<div class="v" id="rv' + r + '">0</div></div>';
-    }
-    host.innerHTML = html;
-    host.addEventListener('click', function (e) {
-      var cell = e.target.closest('.reg');
-      if (!cell) return;
-      var r = +cell.dataset.r;
-      var kind = core.ST.kind;
-      var mode = (kind === 0x40) ? 'sto' : (kind === 0x60 ? 'ld' : 'k');
-      hintText = '';
-      core.key({ a: 'reg', r: r, mode: mode });
-      render();
+  var model = document.getElementById('model');
+  if (model) {
+    model.addEventListener('change', function () {
+      setTimeout(function () { apply(cur, true); }, 0);
     });
   }
-
-  function dispText() {
-    var ST = core.ST;
-    if (ST.err) return 'ЕГГ0Г';
-    if (ST.typing) {
-      var s = ST.input || '0';
-      return s.replace('e', ' E ');
-    }
-    return core.fmt(ST.X);
-  }
-
-  function render() {
-    if (!core) return;
-    var ST = core.ST;
-    var d = document.getElementById('disp');
-    d.textContent = dispText();
-    d.classList.toggle('err', !!ST.err);
-
-    document.getElementById('iF').classList.toggle('on', uiLayer === 'f' || ST.layer === 'f');
-    document.getElementById('iK').classList.toggle('on', ST.layer === 'k');
-    document.getElementById('iR').classList.toggle('on', uiLayer === 'reg');
-    document.getElementById('iPRG').classList.toggle('on', ST.mode === 'PRG');
-    document.getElementById('iERR').classList.toggle('on', !!ST.err);
-    var ang = document.getElementById('iANG');
-    ang.textContent = ST.angle === 'rad' ? 'РАД' : (ST.angle === 'grad' ? 'ГРД' : 'ГРАД');
-    ang.classList.add('on');
-
-    document.getElementById('pos').textContent =
-      core.addrShow(ST.ip) + ' · ' + (ST.mode === 'PRG' ? 'ПРГ' : 'АВТ');
-
-    document.getElementById('hint').textContent = hintText;
-
-    /* регистры на виду только в своём слое или когда идёт выбор регистра */
-    var rbox = document.getElementById('regs');
-    var needRegs = (uiLayer === 'reg') || ST.await === 'reg';
-    rbox.classList.toggle('hide', !needRegs);
-
-    for (var r = 0; r < core.REG_COUNT; r++) {
-      var el = document.getElementById('rv' + r);
-      if (el) el.textContent = core.fmt(ST.R[r]);
-    }
-    var cells = document.querySelectorAll('.reg');
-    for (var i = 0; i < cells.length; i++) {
-      cells[i].classList.toggle('act', ST.await === 'reg');
-    }
-
-    var lays = document.querySelectorAll('.lay');
-    for (var j = 0; j < lays.length; j++) {
-      lays[j].classList.toggle('on', lays[j].dataset.lay === uiLayer);
-    }
-  }
-
-  /* клавиатура компьютера — слои на F и R, как быстрый доступ */
-  document.addEventListener('keydown', function (e) {
-    if (!core) return;
-    var c = e.key;
-    if (/^[0-9]$/.test(c)) { core.key({ a: 'digit', d: +c }); render(); e.preventDefault(); return; }
-    if (c === '.') { core.key({ a: 'dot' }); render(); e.preventDefault(); return; }
-    if (c === '+') { core.key({ a: 'code', c: 0x10 }); render(); e.preventDefault(); return; }
-    if (c === '-') { core.key({ a: 'code', c: 0x11 }); render(); e.preventDefault(); return; }
-    if (c === '*') { core.key({ a: 'code', c: 0x12 }); render(); e.preventDefault(); return; }
-    if (c === '/') { core.key({ a: 'code', c: 0x13 }); render(); e.preventDefault(); return; }
-    if (c === 'Enter') { core.key({ a: 'sp' }); render(); e.preventDefault(); return; }
-    if (c === 'Escape') { core.key({ a: 'code', c: 0x0D }); render(); e.preventDefault(); return; }
-    if (c === 'f' || c === 'F' || c === 'а' || c === 'А') { switchLayer(uiLayer === 'f' ? 'main' : 'f'); e.preventDefault(); return; }
-    if (c === 'r' || c === 'R' || c === 'к' || c === 'К') { switchLayer(uiLayer === 'reg' ? 'main' : 'reg'); e.preventDefault(); return; }
-  });
-
-  renderKeys();
-  build(modelId);
 })();
 </script>
 </body>
