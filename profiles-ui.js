@@ -1,26 +1,25 @@
 /* =========================================================
    pmk61 / profiles-ui.js
-   Раскладка клавиш МК-61 для корпуса (ui.js).
+   Раскладка клавиш МК-61 для интерфейса — то, чего нет в profiles.js.
 
-   Этот файл НЕ трогает ни ядро (core.js), ни таблицу кодов
-   (profiles.js). Он только описывает, какие кнопки в каком
-   ряду и какой код команды дают.
+   profiles.js остаётся таблицей КОДОВ команд (его читают ядро и декодер,
+   он проверен тестами) и НЕ ТРОГАЕТСЯ. Здесь только данные для корпуса:
+   какие кнопки в каком слое и какой код они дают.
 
-   Подключать ПЕРЕД ui.js. Если файла нет — ui.js берёт
-   данные из MKProfiles, как в mk-emulator.
+   Формат кнопки — точно как в mk-emulator/profiles.js:
+     { t: подпись, a: действие, c: код, d: цифра, k: база, jump: 1, cls: класс }
+   Все эти действия понимает key() в core.js ревизии 6 — проверено.
 
-   Отличия от Б3-34:
-   - 105 шагов программы, 15 регистров (R0…Re);
-   - угол по умолчанию Г;
-   - в слое K появляются K-функции (°→′, |x|, ЗН, [x], {x},
-     max, AND, OR, XOR, ИНВ, СЧ, Y→X) и восемь косвенных
-     команд (К БП, К ПП, К x→П, К П→X, К x≠0, К x≥0, К x<0, К x=0).
+   Слои:
+     main — цифры и всё, что на корпусе видно без F/K;
+     f    — второй слой (синусы, логарифмы, ПРГ/АВТ, условия, L0…L3);
+     k    — слой К: K-функции 0x26…0x3E и косвенные команды 0x70…0xE0.
    ========================================================= */
 (function (global) {
   'use strict';
 
-  /* Основной слой — как у Б3-34: клавиатура 61-й повторяет 34-ю. */
-  var MK61_MAIN = [
+  /* ---------- основной слой ---------- */
+  var MAIN = [
     { t: 'f',    a: 'pref-f', cls: 'pref' },
     { t: 'k',    a: 'pref-k', cls: 'pref' },
     { t: 'x→П',  a: 'stox' },
@@ -64,14 +63,14 @@
     { t: 'ln',   a: 'code', c: 0x18 }
   ];
 
-  /* Слой F */
-  var MK61_F = [
+  /* ---------- слой F ---------- */
+  var F = [
     { t: 'sin',    a: 'layer-cmd', c: 0x1C, cls: 'dark' },
     { t: 'cos',    a: 'layer-cmd', c: 0x1D, cls: 'dark' },
     { t: 'tg',     a: 'layer-cmd', c: 0x1E, cls: 'dark' },
-    { t: 'sin⁻¹',  a: 'layer-cmd', c: 0x19, cls: 'dark' },
-    { t: 'cos⁻¹',  a: 'layer-cmd', c: 0x1A, cls: 'dark' },
-    { t: 'tg⁻¹',   a: 'layer-cmd', c: 0x1B, cls: 'dark' },
+    { t: 'arcsin', a: 'layer-cmd', c: 0x19, cls: 'dark' },
+    { t: 'arccos', a: 'layer-cmd', c: 0x1A, cls: 'dark' },
+    { t: 'arctg',  a: 'layer-cmd', c: 0x1B, cls: 'dark' },
 
     { t: 'lg',     a: 'layer-cmd', c: 0x17, cls: 'dark' },
     { t: '10^x',   a: 'layer-cmd', c: 0x15, cls: 'dark' },
@@ -82,8 +81,8 @@
 
     { t: 'x²',     a: 'layer-cmd', c: 0x22, cls: 'dark' },
     { t: '1/x',    a: 'layer-cmd', c: 0x23, cls: 'dark' },
-    { t: 'F↔',     a: 'layer-cmd', c: 0x25, cls: 'dark' },
-    { t: 'F Вx',   a: 'layer-cmd', c: 0x0F, cls: 'dark' },
+    { t: 'F◯',     a: 'layer-cmd', c: 0x25, cls: 'dark' },
+    { t: 'Вx',     a: 'layer-cmd', c: 0x0F, cls: 'dark' },
     { t: 'Cx',     a: 'layer-cmd', c: 0x0D, cls: 'dark' },
     { t: 'CF',     a: 'cf', cls: 'dark' },
 
@@ -99,61 +98,85 @@
     { t: 'L2',     a: 'layer-cmd', c: 0x58, jump: 1, cls: 'dark' },
     { t: 'L3',     a: 'layer-cmd', c: 0x5A, jump: 1, cls: 'dark' },
     { t: 'В↑',     a: 'layer-cmd', c: 0x0E, cls: 'dark' },
-    { t: '↔',      a: 'layer-cmd', c: 0x14, cls: 'dark' },
-
-    { t: 'ln',     a: 'layer-cmd', c: 0x18, cls: 'dark' },
-    { t: 'К НОП',  a: 'layer-cmd', c: 0x54, cls: 'dark' },
-    { t: 'К 1',    a: 'layer-cmd', c: 0x55, cls: 'dark' },
-    { t: 'К 2',    a: 'layer-cmd', c: 0x56, cls: 'dark' },
-    { t: 'Y→X',    a: 'layer-cmd', c: 0x3E, cls: 'dark' },
-    { t: 'K °→′',  a: 'layer-cmd', c: 0x26, cls: 'dark' }
+    { t: '↔',      a: 'layer-cmd', c: 0x14, cls: 'dark' }
   ];
 
-  /* Слой K: K-функции МК-61 и косвенные команды. */
-  var MK61_K = [
-    { t: 'НОП',    a: 'layer-cmd', c: 0x54, cls: 'dark' },
-    { t: '°→′',    a: 'layer-cmd', c: 0x26, cls: 'dark' },
-    { t: '°←′',    a: 'layer-cmd', c: 0x33, cls: 'dark' },
-    { t: '°→′″',   a: 'layer-cmd', c: 0x2A, cls: 'dark' },
-    { t: '°←′″',   a: 'layer-cmd', c: 0x30, cls: 'dark' },
-    { t: '|x|',    a: 'layer-cmd', c: 0x31, cls: 'dark' },
+  /* ---------- слой K ----------
+     Сначала К-функции блока 0x26…0x3E (их у Б3-34 нет вовсе),
+     затем косвенные команды с номером регистра. */
+  var K = [
+    { t: 'НОП',     a: 'layer-cmd', c: 0x54, cls: 'dark' },
+    { t: '°→′',     a: 'layer-cmd', c: 0x26, cls: 'dark' },
+    { t: '°→′″',    a: 'layer-cmd', c: 0x2A, cls: 'dark' },
+    { t: '°←′',     a: 'layer-cmd', c: 0x33, cls: 'dark' },
+    { t: '°←′″',    a: 'layer-cmd', c: 0x30, cls: 'dark' },
+    { t: '|x|',     a: 'layer-cmd', c: 0x31, cls: 'dark' },
 
-    { t: 'ЗН',     a: 'layer-cmd', c: 0x32, cls: 'dark' },
-    { t: '[x]',    a: 'layer-cmd', c: 0x34, cls: 'dark' },
-    { t: '{x}',    a: 'layer-cmd', c: 0x35, cls: 'dark' },
-    { t: 'max',    a: 'layer-cmd', c: 0x36, cls: 'dark' },
-    { t: 'AND',    a: 'layer-cmd', c: 0x37, cls: 'dark' },
-    { t: 'OR',     a: 'layer-cmd', c: 0x38, cls: 'dark' },
+    { t: 'ЗН',      a: 'layer-cmd', c: 0x32, cls: 'dark' },
+    { t: '[x]',     a: 'layer-cmd', c: 0x34, cls: 'dark' },
+    { t: '{x}',     a: 'layer-cmd', c: 0x35, cls: 'dark' },
+    { t: 'max',     a: 'layer-cmd', c: 0x36, cls: 'dark' },
+    { t: 'AND',     a: 'layer-cmd', c: 0x37, cls: 'dark' },
+    { t: 'OR',      a: 'layer-cmd', c: 0x38, cls: 'dark' },
 
-    { t: 'XOR',    a: 'layer-cmd', c: 0x39, cls: 'dark' },
-    { t: 'ИНВ',    a: 'layer-cmd', c: 0x3A, cls: 'dark' },
-    { t: 'СЧ',     a: 'layer-cmd', c: 0x3B, cls: 'dark' },
-    { t: 'Y→X',    a: 'layer-cmd', c: 0x3E, cls: 'dark' },
-    { t: 'К 1',    a: 'layer-cmd', c: 0x55, cls: 'dark' },
-    { t: 'К 2',    a: 'layer-cmd', c: 0x56, cls: 'dark' },
+    { t: 'XOR',     a: 'layer-cmd', c: 0x39, cls: 'dark' },
+    { t: 'ИНВ',     a: 'layer-cmd', c: 0x3A, cls: 'dark' },
+    { t: 'СЧ',      a: 'layer-cmd', c: 0x3B, cls: 'dark' },
+    { t: 'Y→X',     a: 'layer-cmd', c: 0x3E, cls: 'dark' },
+    { t: 'K −',     a: 'layer-cmd', c: 0x27, cls: 'dark' },
+    { t: 'K ×',     a: 'layer-cmd', c: 0x28, cls: 'dark' },
 
-    { t: 'БП R',   a: 'kcmd', k: 0x80, cls: 'dark' },
-    { t: 'ПП R',   a: 'kcmd', k: 0xA0, cls: 'dark' },
-    { t: 'x→П R',  a: 'kcmd', k: 0xB0, cls: 'dark' },
-    { t: 'П→X R',  a: 'kcmd', k: 0xD0, cls: 'dark' },
-    { t: 'x≠0 R',  a: 'kcmd', k: 0x70, cls: 'dark' },
-    { t: 'x≥0 R',  a: 'kcmd', k: 0x90, cls: 'dark' },
+    { t: 'БП R',    a: 'kcmd', k: 0x80, cls: 'dark' },
+    { t: 'ПП R',    a: 'kcmd', k: 0xA0, cls: 'dark' },
+    { t: 'x≠0 R',   a: 'kcmd', k: 0x70, cls: 'dark' },
+    { t: 'x≥0 R',   a: 'kcmd', k: 0x90, cls: 'dark' },
+    { t: 'x<0 R',   a: 'kcmd', k: 0xC0, cls: 'dark' },
+    { t: 'x=0 R',   a: 'kcmd', k: 0xE0, cls: 'dark' },
 
-    { t: 'x<0 R',  a: 'kcmd', k: 0xC0, cls: 'dark' },
-    { t: 'x=0 R',  a: 'kcmd', k: 0xE0, cls: 'dark' }
+    { t: 'x→П R',   a: 'kcmd', k: 0xB0, cls: 'dark' },
+    { t: 'П→x R',   a: 'kcmd', k: 0xD0, cls: 'dark' }
   ];
 
-  global.MKUI_MODELS = {
-    'mk-61': {
-      id: 'mk-61',
-      title: 'ЭЛЕКТРОНИКА',
-      model: 'МК-61',
-      registers: 15,
-      progLen: 105,
-      hasK: true,
-      angle: 'Г',
-      layers: { main: MK61_MAIN, f: MK61_F, k: MK61_K },
-      notes: '105 шагов, 15 регистров (R0…Re), K-функции, косвенная адресация, адреса -0…-4.'
-    }
+  /* ---------- модель ---------- */
+  global.MKUI_MODELS = global.MKUI_MODELS || {};
+
+  global.MKUI_MODELS['mk-61'] = {
+    id: 'mk-61',
+    title: 'МК-61',
+    model: 'МК-61',
+    registers: 15,
+    progLen: 105,
+    hasK: true,
+    addrHigh: true,
+    addrHighFirst: 100,
+    addrHighLast: 104,
+    angle: 'deg',
+    layers: { main: MAIN, f: F, k: K }
   };
-})(typeof window !== 'undefined' ? window : this);
+
+  /* ---------- параметры ядра из профиля ----------
+     ui.js из mk-emulator создаёт ядро без параметров и потому получил бы
+     умолчания без адресов выше 99. Здесь подставляем то, что описано
+     в раскладке: 105 шагов, 15 регистров, K-функции, адреса -0…-4.
+     Правка внешняя: сам ui.js остаётся дословной копией интерфейса 34-й. */
+  if (global.MKCore && typeof global.MKCore.create === 'function') {
+    var origCreate = global.MKCore.create;
+    var wrap = function (opts) {
+      var p = global.MKUI_MODELS['mk-61'];
+      var o = {};
+      var k;
+      if (opts) { for (k in opts) { if (Object.prototype.hasOwnProperty.call(opts, k)) o[k] = opts[k]; } }
+      if (p) {
+        if (o.progLen === undefined) o.progLen = p.progLen;
+        if (o.regCount === undefined) o.regCount = p.registers;
+        if (o.hasK === undefined) o.hasK = p.hasK;
+        if (o.addrHigh === undefined) o.addrHigh = p.addrHigh;
+        if (o.addrHighFirst === undefined) o.addrHighFirst = p.addrHighFirst;
+        if (o.addrHighLast === undefined) o.addrHighLast = p.addrHighLast;
+        if (o.angle === undefined) o.angle = p.angle;
+      }
+      return origCreate.call(global.MKCore, o);
+    };
+    global.MKCore.create = wrap;
+  }
+}(typeof window !== 'undefined' ? window : this));
