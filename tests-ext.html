@@ -20,11 +20,11 @@
 <body>
 <h1>ext61 — тесты расширения</h1>
 <p>Открывать прямо из папки проекта: нужны <code>profiles.js</code>, <code>core.js</code>, <code>ext61.js</code>.</p>
-<p class="note">Версии в ссылках (<code>?v=13</code>) нужны, чтобы браузер не подсовывал старые копии скриптов. Меняй цифру при каждой правке ядра или расширения.</p>
+<p class="note">Версии в ссылках (<code>?v=12</code>) нужны, чтобы браузер не подсовывал старые копии скриптов. Меняй цифру при каждой правке ядра или расширения.</p>
 <ol id="out"></ol>
-<script src="profiles.js?v=13"></script>
-<script src="core.js?v=13"></script>
-<script src="ext61.js?v=13"></script>
+<script src="profiles.js?v=14"></script>
+<script src="core.js?v=14"></script>
+<script src="ext61.js?v=12"></script>
 <script>
 (function () {
   var out = document.getElementById('out');
@@ -54,6 +54,7 @@
              typeof m.page === 'function' &&
              typeof m.setTargetBank === 'function' &&
              typeof m.targetBank === 'function' &&
+             typeof m.homePage === 'function' &&
              m.PAGES === 4;
     check('свежая копия ext61.js (страницы, банк-адресат)',
           ok,
@@ -358,17 +359,22 @@
 
   /* ---------- 25. полный сброс НЕ стирает программу ----------
      У МК-61 «Сброс» гасит регистры и стек, но введённую программу
-     не трогает. Расширение обязано вести себя так же: содержимое
-     страницы сохраняется, текущая страница не меняется, ip = 0. */
+     не трогает. С v6 сброс ещё и возвращает исполнение на страницу 0,
+     поэтому программу проверяем, вернувшись на ту страницу, где она
+     лежала: содержимое цело, а текущая страница после сброса — нулевая. */
   (function () {
     var m = fresh();
     m.selectPage(2);
     m.core.setProgram([0x09, 0x50]);
     m.core.ST.ip = 1;
     m.core.reset(false);
+    var pageAfter = m.page();
+    var ipAfter = m.core.ST.ip;
+    m.selectPage(2);
+    var kept = m.core.ST.prog[0];
     check('сброс не стирает программу страницы',
-          m.core.ST.prog[0] === 0x09 && m.page() === 2 && m.core.ST.ip === 0,
-          'после=' + m.core.ST.prog[0] + ', страница=' + m.page() + ', ip=' + m.core.ST.ip);
+          kept === 0x09 && pageAfter === 0 && ipAfter === 0,
+          'программа=' + kept + ', страница после сброса=' + pageAfter + ', ip=' + ipAfter);
   })();
 
   /* ---------- 26. writeExt пишет в текущую страницу ---------- */
@@ -402,6 +408,43 @@
     check('сброс сохранил программы обеих страниц',
           kept1 === 0x05 && kept0 === 0x03,
           'страница1=' + kept1 + ', страница0=' + kept0);
+  })();
+
+  /* ---------- 28. короткая программа ложится в ТЕКУЩУЮ страницу ----------
+     ПРАВКА v12. В v11 любая загрузка уводила на страницу 0, и записать
+     программу на выбранную страницу стало нельзя: листинг показывал одно,
+     исполнение шло по другому. Теперь короткий массив — в текущую. */
+  (function () {
+    var m = fresh();
+    m.selectPage(2);
+    m.core.setProgram([0x05, 0x50]);
+    var onTwo = (m.core.ST.prog[0] === 0x05);
+    m.selectPage(0);
+    var free0 = (m.core.ST.prog[0] !== 0x05);
+    check('короткая программа ложится в текущую страницу',
+          onTwo && free0,
+          'страница2=' + (onTwo ? '05 есть' : 'пусто') + ', страница0=' + (free0 ? 'чиста' : 'тронута'));
+  })();
+
+  /* ---------- 29. длинная лента редактора — всегда с нулевой страницы ----------
+     Редактор отдаёт 420 ячеек. Такую ленту нельзя класть в текущую
+     страницу: она бы «съехала». Поэтому длинная раскладывается
+     по страницам, а исполнение начинается с нулевой. */
+  (function () {
+    var m = fresh();
+    var len = m.pageSize();
+    var prog = new Array(len * 2).fill(0x54);
+    prog[0] = 0x01;        /* страница 0: 1 */
+    prog[len] = 0x02;      /* страница 1: 2 */
+    m.selectPage(1);       /* специально уходим на чужую страницу */
+    m.core.setProgram(prog);
+    var home = m.page();
+    var p0 = m.core.ST.prog[0];
+    m.selectPage(1);
+    var p1 = m.core.ST.prog[0];
+    check('длинная лента грузится с нулевой страницы',
+          home === 0 && p0 === 0x01 && p1 === 0x02,
+          'страница=' + home + ', стр0=' + p0 + ', стр1=' + p1);
   })();
 
   var sum = document.createElement('div');
