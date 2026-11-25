@@ -22,18 +22,47 @@
        model: "mk-61",
        saved: "…",
        programs: [ { name, prog: [...], data: {0:7}, layout: {n:0},
-                     inputs: ["n"], src: "…", savedAt } ]
+                     inputs: ["n"], src: "…", asm: "…", savedAt } ]
      }
    Понимается и старый одиночный файл { prog, data, layout, src }.
 
    Ничего не считает само: вычисления в core.js, запуск — через
    мост window.MKUI из ui.js.
+
+   ПРАВКА v2 (26.11.2026) — ТЕКСТ АССЕМБЛЕРА ЖИВЁТ В БИБЛИОТЕКЕ
+
+   До этой правки коды сохранялись, а текст из поля ассемблера — нет.
+   Получалось так: собрал программу, сохранил в библиотеку, а вернуться
+   к правке текста нельзя — в записи только коды. Приходилось набирать
+   заново.
+
+   Что изменилось: в запись добавлено необязательное поле asm.
+   Ставится оно ровно в трёх местах, коды и регистры не тронуты:
+
+   • saveCurrent() — берёт текст из pmk61/asmsrc, то есть ровно то,
+     что лежит в поле редактора. Пустое поле — поля asm в записи нет
+     вовсе (не пустая строка), чтобы не путать «текста нет» с «текст
+     пустой»;
+   • importLib() — поле asm из файла больше не отбрасывается: раньше
+     нормализация entry собирала запись заново и теряла всё, чего
+     не было в списке полей;
+   • applyProgram() — шестой довод asmText возвращает текст в поле
+     #asmSrc и заодно пишет его в pmk61/asmsrc. В ключ — обязательно:
+     asm-editor.js пишет туда только по кнопкам (compile, пример,
+     очистка), на обычный input — тоже, но не при загрузке из
+     библиотеки. Без записи в ключ текст исчез бы после перезагрузки
+     страницы.
+
+   Старые записи без asm читаются как есть: перезагрузка такой записи
+   поле редактора не трогает. Именно поэтому флаг has не вводился —
+   отсутствие поля asm и есть честный признак «текста нет».
    ========================================================= */
 (function () {
   'use strict';
 
   var LIB_KEY = 'pmk61/library';
   var BRIDGE_KEY = 'pmk61/bridge';
+  var ASM_KEY = 'pmk61/asmsrc';
 
   var NOP = 0x54;
 
@@ -178,6 +207,34 @@
            ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
+  /* ---------- текст ассемблера ----------
+     Один и тот же ключ, что у asm-editor.js (TEXT_KEY там). Читаем
+     и пишем через try: в приватном режиме localStorage может ругнуться,
+     а падать из-за этого библиотеке незачем. */
+  function readAsm() {
+    try {
+      var t = localStorage.getItem(ASM_KEY);
+      return (t === null) ? '' : String(t);
+    } catch (e) { return ''; }
+  }
+
+  function writeAsm(text) {
+    try { localStorage.setItem(ASM_KEY, String(text == null ? '' : text)); } catch (e) {}
+  }
+
+  /* Поле редактора ищем по id, который создаёт asm-editor.js. Если
+     панель ещё не смонтирована (например, открыт другой экран),
+     просто молчим: текст уже лежит в ключе и подхватится при сборке
+     панели через loadText(). */
+  function putAsmToField(text) {
+    var area = document.getElementById('asmSrc');
+    if (!area) return false;
+    area.value = String(text == null ? '' : text);
+    /* input не будим: он зовёт saveText и renderDirty, а сборки не было.
+       Ручную строку состояния ставит сам редактор при следующей сборке. */
+    return true;
+  }
+
   /* ---------- мои программы ---------- */
   function loadLib() {
     try {
@@ -287,13 +344,14 @@
       if (p.savedAt) meta.push('сохранено ' + fmtWhen(p.savedAt));
       else if (p.saved) meta.push('файл от ' + fmtWhen(p.saved));
       if (p.src) meta.push('из МК-Алго');
+      if (p.asm) meta.push('с текстом asm');
       if (p.layout) {
         var keys = Object.keys(p.layout);
         if (keys.length) meta.push('переменные: ' + keys.join(', '));
       }
 
       ui.list.appendChild(row(n, p.name, p.check || '', p.input || '', {
-        onLoad: function () { applyProgram(p.prog, p.data || {}, p.name, n); },
+        onLoad: function () { applyProgram(p.prog, p.data || {}, p.name, n, false, p.asm); },
         onCheck: function () { checkProgram(p, 'm:' + p.name, n); },
         onDelete: function () {
           var arr = loadLib().filter(function (x) { return x.name !== p.name; });
@@ -373,15 +431,26 @@
     return head + (keys.length > 4 ? ' …' : '');
   }
 
-  function applyProgram(prog, data, title, num, silent) {
+  /* asmText — необязательный шестой довод (v2). Старые вызовы без него
+     работают ровно как раньше: поле редактора и ключ pmk61/asmsrc
+     не трогаются. */
+  function applyProgram(prog, data, title, num, silent, asmText) {
     if (!window.MKUI) return;
     window.MKUI.loadProgram(prog, data, { num: num || null, title: title });
 
     switchTab('code');
 
+    var withAsm = (typeof asmText === 'string' && asmText.length > 0);
+    if (withAsm) {
+      writeAsm(asmText);
+      putAsmToField(asmText);
+    }
+
     if (!silent) {
-      window.MKUI.hint('Загружено «' + title + '». Данные в регистрах, нажми Пуск.');
-      toast('Загружено «' + title + '»\n' + prog.length + ' ячеек · ' + regsText(data));
+      var tail = withAsm ? ' Текст возвращён в поле ассемблера.' : '';
+      window.MKUI.hint('Загружено «' + title + '». Данные в регистрах, нажми Пуск.' + tail);
+      toast('Загружено «' + title + '»\n' + prog.length + ' ячеек · ' + regsText(data) +
+            (withAsm ? '\nс текстом asm' : ''));
     }
   }
 
@@ -401,6 +470,13 @@
     var title = obj.from || 'МК-Алго';
     window.MKUI.loadProgram(obj.prog, obj.data || {}, { num: null, title: title });
     switchTab('code');
+
+    /* Если у записи моста есть текст — возвращаем и его тем же путём. */
+    if (typeof obj.asm === 'string' && obj.asm.length) {
+      writeAsm(obj.asm);
+      putAsmToField(obj.asm);
+    }
+
     window.MKUI.hint('Загружено из «' + title + '»: ' + obj.prog.length +
       ' ячеек, ' + regsText(obj.data) + '. Нажми «Шаг» или «Авто».');
     toast('Из «' + title + '»: ' + obj.prog.length + ' ячеек\n' + regsText(obj.data));
@@ -465,7 +541,14 @@
     if (!name) return;
     name = String(name).trim() || 'Моя программа';
 
+    /* v2: текст из поля редактора. Раньше он терялся — в записи были
+       только коды, и вернуться к правке текста после сохранения было
+       нельзя. Пустое поле — поля asm в записи нет вовсе. */
+    var asmText = readAsm();
+
     var entry = { name: name, prog: prog, data: regs, savedAt: Date.now() };
+    if (asmText.trim()) entry.asm = asmText;
+
     var idx = -1;
     for (var k = 0; k < arr.length; k++) if (arr[k].name === name) idx = k;
 
@@ -488,10 +571,12 @@
     window.MKUI.setProgMeta({ num: num, title: name });
 
     window.MKUI.hint('Сохранено «' + name + '» под номером ' + pad2(num) +
-      ': ' + prog.length + ' ячеек, регистров ' + Object.keys(regs).length);
+      ': ' + prog.length + ' ячеек, регистров ' + Object.keys(regs).length +
+      (entry.asm ? ', текст asm — ' + entry.asm.split('\n').length + ' строк' : ', текста asm нет'));
     toast('Сохранено «' + name + '» · ' + pad2(num) + '\n' +
       prog.length + ' ячеек · ' + regsText(regs) + '\n' +
-      'в списке: ' + fmtWhen(entry.savedAt) + note, 'ok', 8000);
+      (entry.asm ? 'с текстом asm' : 'без текста asm') + ' · ' +
+      fmtWhen(entry.savedAt) + note, 'ok', 8000);
     renderShelf();
   }
 
@@ -589,6 +674,9 @@
         if (p.inputs) entry.inputs = p.inputs;
         if (p.src) entry.src = p.src;
         if (fileSaved) entry.saved = fileSaved;
+        /* v2: текст ассемблера из файла. Нормализация собирает запись
+           заново, и без этой строки поле asm молча терялось бы. */
+        if (typeof p.asm === 'string' && p.asm.trim()) entry.asm = p.asm;
 
         var idx = -1;
         for (var k = 0; k < arr.length; k++) if (arr[k].name === name) { idx = k; break; }
@@ -618,7 +706,7 @@
       saveLib(arr);
 
       var first = normalized[0];
-      applyProgram(first.prog, first.data, first.name, null, true);
+      applyProgram(first.prog, first.data, first.name, null, true, first.asm);
 
       var regLine = regsText(first.data);
       var when = fmtWhen(first.savedAt || fileSaved);
@@ -628,6 +716,7 @@
                 first.prog.length + ' ячеек · ' + regLine + '\n' +
                 (when ? 'файл от ' + when : 'дата в файле не указана') + '\n' +
                 libLine;
+      if (first.asm) msg += '\nс текстом asm';
       if (renamed.length) msg += '\nсохранено как: ' + renamed.join(', ');
 
       var hasRegs = Object.keys(first.data || {}).length > 0;
@@ -675,6 +764,9 @@
     takeBridge: takeBridge,
     toast: toast,
     fmtWhen: fmtWhen,
+    readAsm: readAsm,
+    writeAsm: writeAsm,
+    putAsmToField: function (t) { return putAsmToField(t); },
     formatFile: function (list) {
       return {
         app: 'pmk61',
