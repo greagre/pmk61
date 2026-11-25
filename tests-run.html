@@ -74,8 +74,8 @@
     });
   }
 
-  /* Текст → 420 ячеек. Длину и страницы передаём явно: у голого ядра
-     расширения нет, и pageInfo() иначе решит, что страница одна. */
+  /* Текст → 420 ячеек. Длину и число страниц передаём явно: у голого
+     ядра расширения нет, и pageInfo() иначе решит, что страница одна. */
   function build(ext, text) {
     return MKAsmEditor.buildProgram(text, {
       core: ext.core,
@@ -102,15 +102,15 @@
     return v;
   }
 
-  function runText(text) {
-    var ext = makeExt();
-    load(ext, text);
-    var res = ext.run(20000);
-    return { ext: ext, res: res };
+  function exampleById(id) {
+    for (var i = 0; i < examples.length; i++) {
+      if (examples[i].id === id) return examples[i];
+    }
+    return null;
   }
 
-  /* Ожидания по id примера. Живут отдельно от текста примеров:
-     текст — источник задачи, числа — источник истины. */
+  /* Ожидания по id примера. Текст примера — источник задачи,
+     эти числа — источник истины при проверке. */
   var EXPECT = {
     fact:   { x: 5040 },
     page:   { x: 0, page: 0 },
@@ -121,27 +121,24 @@
     page2:  { x: 2, page: 2 }
   };
 
-  /* ---------- прогон каждого примера из панели ---------- */
-
   var examples = (window.MKAsmEditor && MKAsmEditor.examples) || [];
+  if (!examples.length) fail('панель не отдала примеры: подключи asm-editor.js');
 
-  if (!examples.length) {
-    fail('панель не отдала примеры: подключи asm-editor.js');
-  }
+  /* ---------- прогон каждого примера из панели ---------- */
 
   examples.forEach(function (ex) {
     add('Пример «' + ex.name + '» · ' + ex.expect, function () {
       var o = EXPECT[ex.id];
       if (!o) fail('нет ожиданий для примера «' + ex.id + '» — допиши в EXPECT');
 
-      var got = runText(ex.src);
-      var ST = got.ext.ST;
+      var ext = makeExt();
+      load(ext, ex.src);
+      var res = ext.run(20000);
+      var ST = ext.ST;
 
-      if (got.res.err) {
-        fail('ЕГГ0Г на шаге ' + got.res.steps);
-      }
-      if (got.res.result !== 'stop') {
-        fail('не дошло до С/П: ' + got.res.result + ' за ' + got.res.steps + ' шагов');
+      if (res.err) fail('ЕГГ0Г на шаге ' + res.steps);
+      if (res.result !== 'stop') {
+        fail('не дошло до С/П: ' + res.result + ' за ' + res.steps + ' шагов');
       }
       if (o.x !== undefined && !near(ST.X, o.x)) {
         fail('X = ' + show(ST.X) + ', ожидалось ' + show(o.x));
@@ -150,15 +147,15 @@
         fail('Y = ' + show(ST.Y) + ', ожидалось ' + show(o.y));
       }
       if (o.r0 !== undefined) {
-        var v0 = regOfBank(got.ext, 0, 0);
+        var v0 = regOfBank(ext, 0, 0);
         if (!near(v0, o.r0)) fail('R0 банка 0 = ' + show(v0) + ', ожидалось ' + show(o.r0));
       }
       if (o.bank1r0 !== undefined) {
-        var v1 = regOfBank(got.ext, 1, 0);
+        var v1 = regOfBank(ext, 1, 0);
         if (!near(v1, o.bank1r0)) fail('R0 банка 1 = ' + show(v1) + ', ожидалось ' + show(o.bank1r0));
       }
       if (o.page !== undefined) {
-        var pg = got.ext.page();
+        var pg = ext.page();
         if (pg !== o.page) fail('страница = ' + pg + ', ожидалось ' + o.page);
       }
     });
@@ -178,12 +175,12 @@
     }
   });
 
-  add('.page 1 без режима расширения — ошибка сборки', function () {
+  add('.page 1 при одной странице — ошибка сборки', function () {
     var ext = makeExt();
     var r = MKAsmEditor.buildProgram('.page 1\n5', {
       core: ext.core, len: PAGE_SIZE, pageSize: PAGE_SIZE, pages: 1
     });
-    if (r.ok) fail('сборка прошла, хотя страница одна');
+    if (r.ok) fail('сборка прошла, хотя страница одна и .page недоступна');
   });
 
   add('Повторная .page на занятую страницу — ошибка перекрытия', function () {
@@ -201,15 +198,10 @@
   /* ---------- страница как состояние ---------- */
 
   add('Сброс возвращает исполнение на страницу 0', function () {
-    var ext = makeExt();
-    load(ext, '.page 1\n5\nС/П.page_marker');
-    /* испорченный текст выше не нужен: берём готовый пример со страницей */
-    var ex = null;
-    for (var i = 0; i < examples.length; i++) {
-      if (examples[i].id === 'page1') ex = examples[i];
-    }
+    var ex = exampleById('page1');
     if (!ex) fail('нет примера page1');
 
+    var ext = makeExt();
     load(ext, ex.src);
     ext.run(20000);
     if (ext.page() !== 1) fail('перед сбросом страница ' + ext.page() + ', ожидалась 1');
@@ -219,31 +211,11 @@
     if (ext.ST.ip !== 0) fail('после сброса шаг ' + ext.ST.ip + ', ожидался 0');
   });
 
-  add('Загрузка короткой программы начинается со страницы 0', function () {
-    var ext = makeExt();
-    load(ext, '.page 2\nF0 24\nС/П');
-    ext.run(20000);
-    ext.core.setProgram(
-      (function () {
-        var r = build(ext, 'С/П');
-        if (!r.ok) fail('сборка «С/П» не удалась: ' + r.errors.join('; '));
-        return r.program;
-      })(), false
-    );
-    if (ext.page() !== 0) fail('страница после загрузки ' + ext.page() + ', ожидалась 0');
-    if (ext.ST.prog[0] !== 0x50) {
-      fail('по адресу 00 лежит ' + MKCore.hex2(ext.ST.prog[0]) + ', а не 50 (С/П)');
-    }
-  });
-
-  add('Содержимое страницы 1 не пострадало от сброса', function () {
-    var ext = makeExt();
-    var ex = null;
-    for (var i = 0; i < examples.length; i++) {
-      if (examples[i].id === 'page1') ex = examples[i];
-    }
+  add('Сброс не стирает программу ни на одной странице', function () {
+    var ex = exampleById('page1');
     if (!ex) fail('нет примера page1');
 
+    var ext = makeExt();
     load(ext, ex.src);
     ext.core.reset(false);
 
@@ -254,6 +226,18 @@
     if (ext.ST.prog[0] !== 0x03 || ext.ST.prog[1] !== 0x03) {
       fail('страница 1 потеряла код 33: ' +
         MKCore.hex2(ext.ST.prog[0]) + ' ' + MKCore.hex2(ext.ST.prog[1]));
+    }
+  });
+
+  add('Загрузка программы начинается со страницы 0', function () {
+    var ext = makeExt();
+    ext.selectPage(2);
+    if (ext.page() !== 2) fail('переключение на страницу 2 не сработало');
+
+    load(ext, 'С/П');
+    if (ext.page() !== 0) fail('страница после загрузки ' + ext.page() + ', ожидалась 0');
+    if (ext.ST.prog[0] !== 0x50) {
+      fail('по адресу 00 лежит ' + MKCore.hex2(ext.ST.prog[0]) + ', а не 50 (С/П)');
     }
   });
 
