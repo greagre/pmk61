@@ -23,10 +23,19 @@
      .3C                  байт напрямую по шестнадцатеричному коду
      БП 100               адрес выше 99: первая ячейка «·», вторая цифра
 
+   ВАЖНО: одна строка — одна команда. «+ С/П» в одной строке не соберётся,
+   это две команды и две строки.
+
    Имена команд — ровно те, что отдаёт MKCore.cmdName: язык ассемблера
    и язык листинга не могут разойтись. Тест «покрытие» перебирает все
    коды, которые ядро умеет называть, собирает каждое имя и проверяет,
    что получился тот же код.
+
+   РЕГИСТР БУКВ
+
+   Латиница и кириллица приводятся к верхнему регистру, кроме греческой π
+   (иначе она стала бы Π). Буква К и латинская K считаются одной и той же:
+   ядро называет команды то так, то так, а человек набирает как удобно.
 
    ДВА ПРОХОДА
 
@@ -49,14 +58,27 @@
   var PREFIX = 0xF0;
   var MAX_ADDR = 104;
 
-  /* Латинские буквы — в верхний регистр, русские не трогаем:
-     иначе π превратилась бы в греческую Π. Минус приводим к обычному. */
+  /* Латиница и кириллица — в верхний регистр, греческая π не трогается:
+     иначе она превратилась бы в Π. Минусы разных начертаний — к обычному. */
   function norm(s) {
     var t = String(s == null ? '' : s);
     t = t.replace(/[\u2212\u2013\u2014]/g, '-');
-    t = t.replace(/[a-z]/g, function (ch) { return ch.toUpperCase(); });
+    t = t.replace(/[a-zа-яё]/g, function (ch) { return ch.toUpperCase(); });
     t = t.replace(/\s+/g, ' ');
     return t.replace(/^\s+|\s+$/g, '');
+  }
+
+  /* Ключ с латинской K и с кириллической К — одно и то же. */
+  function lookup(table, key) {
+    if (Object.prototype.hasOwnProperty.call(table, key)) return table[key];
+    var alt = key.replace(/^К/, 'K');
+    if (alt !== key && Object.prototype.hasOwnProperty.call(table, alt)) return table[alt];
+    alt = key.replace(/^K/, 'К');
+    if (alt !== key && Object.prototype.hasOwnProperty.call(table, alt)) return table[alt];
+    if (Object.prototype.hasOwnProperty.call(table, key.toUpperCase())) {
+      return table[key.toUpperCase()];
+    }
+    return undefined;
   }
 
   function stripComment(s) {
@@ -70,7 +92,7 @@
 
   /* ---------- таблицы ----------
      Простые команды: ровно по одному байту, аргумента нет.
-     Ключи записаны уже нормализованными (латиница в верхнем регистре). */
+     Ключи записаны уже нормализованными (буквы в верхнем регистре). */
   var SIMPLE = {
     '0': 0x00, '1': 0x01, '2': 0x02, '3': 0x03, '4': 0x04,
     '5': 0x05, '6': 0x06, '7': 0x07, '8': 0x08, '9': 0x09,
@@ -82,10 +104,14 @@
     'SIN': 0x1C, 'COS': 0x1D, 'TG': 0x1E,
     'π': 0x20, '√': 0x21, 'X²': 0x22, 'X^2': 0x22, '1/X': 0x23, 'X^Y': 0x24,
     'F◯': 0x25,
-    'K °→′': 0x26, 'K °→′″': 0x2A, 'K °←′″': 0x30, 'K °←′': 0x33,
+    'K °→′': 0x26,
+    /* К-арифметика: те же операции, но с аргументом из памяти */
+    'K -': 0x27, 'K *': 0x28, 'K ×': 0x28, 'K /': 0x29, 'K ÷': 0x29,
+    'K °→′″': 0x2A, 'K °←′″': 0x30, 'K °←′': 0x33,
     'K ЗН': 0x32, 'K |X|': 0x31, 'K [X]': 0x34, 'K {X}': 0x35, 'K MAX': 0x36,
     'K AND': 0x37, 'K OR': 0x38, 'K XOR': 0x39, 'K ИНВ': 0x3A,
-    'K СЧ': 0x3B, 'ОШИБКА': 0x3C, 'K °→′″ (ДУБЛЬ)': 0x3D, 'Y→X': 0x3E,
+    'K СЧ': 0x3B, 'ОШИБКА': 0x3C, 'K °→"': 0x3D, 'K °→′″ (ДУБЛЬ)': 0x3D,
+    'Y→X': 0x3E,
     'С/П': 0x50, 'В/О': 0x52, 'К НОП': 0x54, 'НОП': 0x54,
     'К 1': 0x55, 'К 2': 0x56
   };
@@ -136,8 +162,9 @@
     m = /^\.([0-9A-F]{2})$/.exec(t);
     if (m) return { type: 'byte', bytes: [parseInt(m[1], 16)] };
 
-    if (Object.prototype.hasOwnProperty.call(SIMPLE, t)) {
-      return { type: 'byte', bytes: [SIMPLE[t]] };
+    var simple = lookup(SIMPLE, t);
+    if (typeof simple === 'number') {
+      return { type: 'byte', bytes: [simple] };
     }
 
     var sp = t.lastIndexOf(' ');
@@ -145,14 +172,16 @@
       var name = t.slice(0, sp);
       var arg = t.slice(sp + 1);
 
-      if (Object.prototype.hasOwnProperty.call(RANGE, name)) {
+      var rangeBase = lookup(RANGE, name);
+      if (typeof rangeBase === 'number') {
         var r = regIndex(arg);
         if (r < 0) return { type: 'err', msg: 'Неверный номер регистра: ' + arg };
-        return { type: 'byte', bytes: [RANGE[name] | r] };
+        return { type: 'byte', bytes: [rangeBase | r] };
       }
 
-      if (Object.prototype.hasOwnProperty.call(JUMPS, name)) {
-        return { type: 'jump', code: JUMPS[name], target: norm(arg) };
+      var jumpCode = lookup(JUMPS, name);
+      if (typeof jumpCode === 'number') {
+        return { type: 'jump', code: jumpCode, target: norm(arg) };
       }
     }
 
