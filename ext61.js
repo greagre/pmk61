@@ -1,7 +1,7 @@
 /* =========================================================
    pmk61 / ext61.js
    Расширение линии МК-61: двухбайтные команды с префиксом 0xF0,
-   банки регистров и межбанковый доступ.
+   банки регистров, межбанковый доступ и страницы программы.
 
    ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА
    core.js НЕ правится. Модуль создаёт обычный экземпляр ядра
@@ -21,7 +21,8 @@
      06      банк-адресат → X
      10      адрес этой команды → X        («K СЧ»)
      11      адрес следующей ячейки → X
-     20…23   резерв: страницы программы (пока ЕГГ0Г)
+     20…23   выбрать страницу программы 0…3 и начать её с нуля
+     24      номер текущей страницы → X
      40…4F   x→П в банк-адресат: RGn адресата ← X        (F = R0)
      60…6F   П→x из банка-адресата: X ← RGn адресата      (F = R0)
 
@@ -42,6 +43,26 @@
    МК-61 в банке 0 ведут себя точно как раньше, а банки — это
    просто ещё 45 регистров, которые видно только по команде F0.
 
+   СТРАНИЦЫ ПРОГРАММЫ
+
+   Четыре страницы по 105 шагов: всего 420 шагов вместо 105.
+   Адреса остаются ДВУЗНАЧНЫМИ и считаются внутри страницы —
+   формат перехода не тронут вообще, поэтому вся арифметика
+   адресов МК-61 (включая «-0»…«-4») работает как прежде.
+
+   Команда F0 2n переключает на страницу n и начинает её с шага 00.
+   Два следствия, о которых нужно знать:
+
+   1. Если страница уже текущая, команда НИЧЕГО НЕ ДЕЛАЕТ.
+      Иначе F0 2n, стоящая в начале страницы, зациклилась бы
+      навсегда: переход в начало → снова она же.
+   2. Переключение на ПУСТУЮ страницу — это исполнение нулей
+      с шага 00. Программист отвечает за то, чтобы там было
+      что исполнять (как и за любую другую программу).
+
+   Страница — такое же глобальное состояние, как банк, и сбрасывается
+   полным сбросом. Программный сброс (В/О) страницу не меняет.
+
    ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ
 
    Единого адресного пространства: программа по-прежнему не может
@@ -53,6 +74,7 @@
 
   var PREFIX = 0xF0;
   var BANKS = 4;
+  var PAGES = 4;
   var DEF_REGS = 15;
 
   /* младшая цифра F означает R0 — как в таблице кодов МК-61 */
@@ -67,7 +89,8 @@
     0x05: 'банк-адресат ← X',
     0x06: 'банк-адресат → X',
     0x10: 'адрес → X',
-    0x11: 'следующий адрес → X'
+    0x11: 'следующий адрес → X',
+    0x24: 'страница → X'
   };
 
   var REG_CHARS = '0123456789abcde';
@@ -81,16 +104,18 @@
   function describe(second) {
     var s = second & 0xFF;
     if (NAMES[s]) return NAMES[s];
+    if (s >= 0x20 && s <= 0x23) return 'страница ' + (s & 0x03);
     if (s >= 0x40 && s <= 0x4F) return 'x→П ' + regChar(s) + ' в банк-адресат';
     if (s >= 0x60 && s <= 0x6F) return 'П→x ' + regChar(s) + ' из банка-адресата';
-    if (s >= 0x20 && s <= 0x23) return 'резерв: страница ' + (s & 0x03);
     return 'неизвестная EXT-команда';
   }
 
   function isExt(second) {
     var s = second & 0xFF;
     if (Object.prototype.hasOwnProperty.call(NAMES, s)) return true;
-    return (s >= 0x40 && s <= 0x4F) || (s >= 0x60 && s <= 0x6F);
+    return (s >= 0x20 && s <= 0x23) ||
+           (s >= 0x40 && s <= 0x4F) ||
+           (s >= 0x60 && s <= 0x6F);
   }
 
   /* ---------- фабрика ---------- */
@@ -121,6 +146,10 @@
       return new Array(core.REG_COUNT).fill(0);
     }
 
+    function zeroPage() {
+      return new Array(progLen).fill(0);
+    }
+
     var banks = [];
     for (var i = 0; i < BANKS; i++) banks.push(zeroBank());
     /* нулевой банк — родной массив ядра, чтобы МК-61-программы
@@ -129,6 +158,12 @@
     var cur = 0;
     /* банк, к которому обращаются команды 40…/60… без переключения */
     var target = 0;
+
+    var pages = [];
+    for (var p = 0; p < PAGES; p++) pages.push(zeroPage());
+    /* нулевая страница — родной массив ядра */
+    pages[0] = core.ST.prog;
+    var curPage = 0;
 
     /* ---------- банки ---------- */
 
@@ -156,6 +191,22 @@
       if (r < 0 || r >= core.REG_COUNT) return -1;
       return r;
     }
+
+    /* ---------- страницы ---------- */
+
+    /* Переключение на ту же страницу — пустая операция, иначе команда
+       в начале страницы зациклилась бы сама на себя. */
+    function selectPage(n) {
+      if (typeof n !== 'number' || n < 0 || n >= PAGES) return false;
+      if (n === curPage) return true;
+      pages[curPage] = core.ST.prog;   /* запомнить текущую */
+      curPage = n;
+      core.ST.prog = pages[curPage];   /* подменить ссылку — ядро читает ST.prog */
+      core.ST.ip = 0;                  /* новая страница начинается с шага 00 */
+      return true;
+    }
+
+    function page() { return curPage; }
 
     /* ---------- стек ---------- */
 
@@ -219,6 +270,10 @@
           return push(at);
         case 0x11:
           return push((at + 2) % progLen);
+        case 0x20: case 0x21: case 0x22: case 0x23:
+          return selectPage(second & 0x03);
+        case 0x24:
+          return push(curPage);
         default:
           break;
       }
@@ -275,17 +330,32 @@
     core.step = stepExt;
     core.run = runExt;
 
+    /* setProgram создаёт новый массив программы — его нужно привязать
+       к текущей странице, иначе запись уйдёт в отвязанный массив */
+    var baseSetProgram = core.setProgram;
+    if (typeof baseSetProgram === 'function') {
+      core.setProgram = function (prog) {
+        var res = baseSetProgram.call(core, prog);
+        pages[curPage] = core.ST.prog;
+        return res;
+      };
+    }
+
     var baseReset = core.reset;
     core.reset = function (soft) {
       var r = baseReset.call(core, soft);
       if (!soft) {
-        /* ядро создало новый массив — привязать его к текущему банку,
-           остальные банки при полном сбросе обнуляются */
+        /* ядро создало новые массивы — привязать их к текущим позициям,
+           остальные банки и страницы при полном сбросе обнуляются */
         banks[cur] = core.ST.R;
         for (var k = 0; k < BANKS; k++) {
           if (k !== cur) banks[k] = zeroBank();
         }
         target = 0;
+        pages[curPage] = core.ST.prog;
+        for (var q = 0; q < PAGES; q++) {
+          if (q !== curPage) pages[q] = zeroPage();
+        }
       }
       return r;
     };
@@ -312,12 +382,16 @@
       banksCount: function () { return BANKS; },
       targetBank: targetBank,
       setTargetBank: function (n) { return setTarget(n); },
+      page: page,
+      selectPage: selectPage,
+      pagesCount: function () { return PAGES; },
       step: stepExt,
       run: runExt,
       writeExt: writeExt,
       extName: describe,
       PREFIX: PREFIX,
-      BANKS: BANKS
+      BANKS: BANKS,
+      PAGES: PAGES
     };
   }
 
@@ -325,6 +399,7 @@
     create: create,
     PREFIX: PREFIX,
     BANKS: BANKS,
+    PAGES: PAGES,
     extName: describe,
     isExt: isExt
   };
