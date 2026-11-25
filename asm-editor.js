@@ -49,9 +49,10 @@
    Один пример стал списком: факториал, номер страницы, следующий адрес,
    раздельность банков и межбанковый доступ. Каждый пример несёт строку
    «ожидается …» — она видна под кнопками, чтобы результат было с чем
-   сравнить, а не гадать, что должно было выйти. Программы с F0 работают
+   сравнить, а не гадать, что должно было выйти. Пример сразу грузится
+   в память: от выбора до «Пуск» одно нажатие. Программы с F0 работают
    только в режиме расширения; на обычной МК-61 ядро справедливо ругнётся
-   на префикс.
+   на префикс, и панель заранее пишет «нужен режим расширения».
    ========================================================= */
 (function (global) {
   'use strict';
@@ -170,7 +171,7 @@
     {
       id: 'page',
       name: 'F0 24 — номер страницы',
-      expect: 'X = 0, шагов 2',
+      expect: 'X = 0',
       ext: true,
       src: [
         '; «страница → X»: доказательство, что ядро исполняет F0,',
@@ -186,8 +187,8 @@
       expect: 'X = 2, Y = 0',
       ext: true,
       src: [
-        '; «адрес этой команды → X» и «адрес следующей → X»',
-        '; F0 10 стоит на 00, F0 11 — на 02, значит ответ 2',
+        '; F0 10 — «адрес этой команды → X», F0 11 — «адрес следующей»',
+        '; F0 10 стоит на 00, F0 11 — на 02, поэтому ответ 2',
         '; ожидается X = 2, Y = 0',
         'F0 10',
         'F0 11',
@@ -265,29 +266,18 @@
     var s = document.createElement('style');
     s.id = 'asmPanelStyle';
     s.textContent = [
-      '.asm-panel{margin:10px 0;padding:10px;border:1px solid rgba(127,127,127,.35);',
-      'border-radius:10px;background:rgba(127,127,127,.07)}',
+      '.asm-panel{margin:10px 0;padding:10px;border:1px solid rgba(127,127,127,.35);border-radius:10px;background:rgba(127,127,127,.07)}',
       '.asm-panel h3{margin:0 0 8px;font-size:14px;font-weight:600}',
-      '.asm-panel textarea{width:100%;min-height:120px;box-sizing:border-box;',
-      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;',
-      'line-height:1.45;padding:8px;border-radius:8px;',
-      'border:1px solid rgba(127,127,127,.4);background:rgba(0,0,0,.06);',
-      'color:inherit;resize:vertical}',
-      '.asm-panel select{width:100%;box-sizing:border-box;margin-bottom:8px;",
-      'padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);',
-      'background:transparent;color:inherit;font-size:13px}'.replace('",', '"'),
+      '.asm-panel textarea{width:100%;min-height:120px;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.45;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:rgba(0,0,0,.06);color:inherit;resize:vertical}',
+      '.asm-panel select{width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;font-size:13px}',
       '.asm-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}',
-      '.asm-row button{padding:8px 12px;border-radius:8px;',
-      'border:1px solid rgba(127,127,127,.5);background:transparent;',
-      'color:inherit;font-size:13px}',
-      '.asm-row button.main{background:rgba(70,140,255,.18);',
-      'border-color:rgba(70,140,255,.6)}',
+      '.asm-row button{padding:8px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font-size:13px}',
+      '.asm-row button.main{background:rgba(70,140,255,.18);border-color:rgba(70,140,255,.6)}',
       '.asm-stat{margin-top:8px;font-size:12px;opacity:.85}',
       '.asm-stat.ok{color:#1a8c4a}',
       '.asm-stat.err{color:#c0392b}',
-      '.asm-expect{margin-top:6px;font-size:12px;font-weight:600;opacity:.9}',
-      '.asm-err{font-size:12px;padding:4px 6px;margin-top:4px;',
-      'border-left:3px solid #c0392b;background:rgba(192,57,43,.08);cursor:pointer}',
+      '.asm-expect{margin-top:6px;font-size:12px;font-weight:600}',
+      '.asm-err{font-size:12px;padding:4px 6px;margin-top:4px;border-left:3px solid #c0392b;background:rgba(192,57,43,.08);cursor:pointer}',
       '.asm-tip{font-size:11px;opacity:.6;margin-top:6px}'
     ].join('');
     document.head.appendChild(s);
