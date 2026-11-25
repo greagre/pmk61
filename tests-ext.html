@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ext61 — тесты</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; padding: 16px; line-height: 1.5; max-width: 760px; }
+  h1 { font-size: 1.25rem; }
+  ol { padding-left: 1.1rem; }
+  li { margin: 5px 0; }
+  .ok { color: #1a7f37; }
+  .fail { color: #b42318; font-weight: 600; }
+  .sum { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #f4f4f4; font-weight: 600; }
+  .sum.bad { background: #fdecea; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>ext61 — тесты расширения</h1>
+<p>Открывать прямо из папки проекта: нужны <code>profiles.js</code>, <code>core.js</code>, <code>ext61.js</code>.</p>
+<ol id="out"></ol>
+<script src="profiles.js"></script>
+<script src="core.js"></script>
+<script src="ext61.js"></script>
+<script>
+(function () {
+  var out = document.getElementById('out');
+  var pass = 0, fail = 0;
+
+  function check(name, ok, info) {
+    var li = document.createElement('li');
+    li.className = ok ? 'ok' : 'fail';
+    li.textContent = (ok ? '\u2714 ' : '\u2718 ') + name + (info ? ' \u2014 ' + info : '');
+    out.appendChild(li);
+    if (ok) pass++; else fail++;
+  }
+
+  function fresh() { return MKExt61.create({}); }
+
+  /* ---------- 1. регрессия: обычная программа без F0 ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x02, 0x0E, 0x03, 0x10, 0x50]);   /* 2 В↑ 3 + С/П */
+    var r = m.run(1000);
+    check('МК-61 без F0: 2 + 3 = 5', r.x === 5 && r.result === 'stop', 'X=' + r.x);
+  })();
+
+  /* ---------- 2. банк 1 не видит значения банка 0 ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([
+      0x05,          /* 00: 5            */
+      0x40,          /* 01: x->П 0       (банк 0) */
+      0xF0, 0x01,    /* 02: банк 1       */
+      0x60,          /* 04: П->x 0       (банк 1 = 0) */
+      0xF0, 0x00,    /* 05: банк 0       */
+      0x60,          /* 07: П->x 0       (банк 0 = 5) */
+      0x50           /* 08: С/П           */
+    ]);
+    var r = m.run(1000);
+    check('банки изолированы', r.x === 5 && m.ST.Y === 0,
+          'X=' + r.x + ', Y=' + m.ST.Y);
+  })();
+
+  /* ---------- 3. запись в разные банки не затирает друг друга ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setX(7);
+    m.core.exec(0x40);            /* банк 0: RG0 = 7 */
+    m.selectBank(2);
+    var empty = (m.core.ST.R[0] === 0);
+    m.core.setX(9);
+    m.core.exec(0x40);            /* банк 2: RG0 = 9 */
+    m.selectBank(0);
+    var back0 = m.core.ST.R[0];
+    m.selectBank(2);
+    var back2 = m.core.ST.R[0];
+    check('новый банк начинается с нулей', empty, 'RG0=' + (empty ? 0 : 'не 0'));
+    check('банк 0 сохранил 7', back0 === 7, 'RG0=' + back0);
+    check('банк 2 сохранил 9', back2 === 9, 'RG0=' + back2);
+  })();
+
+  /* ---------- 4. F0 04 — номер текущего банка ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0xF0, 0x01, 0xF0, 0x04, 0x50]);
+    var r = m.run(100);
+    check('F0 04 отдаёт номер банка', r.x === 1, 'X=' + r.x);
+  })();
+
+  /* ---------- 5. F0 10 — адрес самой команды ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x54, 0x54, 0x54, 0xF0, 0x10, 0x50]);
+    var r = m.run(100);
+    check('F0 10 отдаёт адрес команды', r.x === 3, 'X=' + r.x);
+  })();
+
+  /* ---------- 6. F0 11 — адрес следующей ячейки ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x54, 0x54, 0xF0, 0x11, 0x50]);
+    var r = m.run(100);
+    check('F0 11 отдаёт адрес + 2', r.x === 4, 'X=' + r.x);
+  })();
+
+  /* ---------- 7. неизвестный второй байт даёт ЕГГ0Г ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0xF0, 0x99, 0x50]);
+    var r = m.run(10);
+    check('F0 99 → ЕГГ0Г', r.result === 'error' && m.core.ST.err === true, 'result=' + r.result);
+  })();
+
+  /* ---------- 8. резервный второй байт тоже ЕГГ0Г ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0xF0, 0x20, 0x50]);
+    var r = m.run(10);
+    check('резерв F0 20 → ЕГГ0Г', r.result === 'error', 'result=' + r.result);
+  })();
+
+  /* ---------- 9. полный сброс чистит банки ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setX(5); m.core.exec(0x40);
+    m.selectBank(1);
+    m.core.setX(6); m.core.exec(0x40);
+    m.core.reset(false);
+    check('сброс чистит регистры', m.core.ST.R[0] === 0 && m.bank() === 1,
+          'RG0=' + m.core.ST.R[0] + ', банк=' + m.bank());
+  })();
+
+  /* ---------- 10. writeExt пишет две ячейки ---------- */
+  (function () {
+    var m = fresh();
+    m.core.ST.ip = 0;
+    var ok = m.writeExt(0x02);
+    check('writeExt пишет F0 и второй байт',
+          ok && m.core.ST.prog[0] === 0xF0 && m.core.ST.prog[1] === 0x02 && m.core.ST.ip === 2,
+          'prog[0]=' + m.core.ST.prog[0] + ', ip=' + m.core.ST.ip);
+  })();
+
+  /* ---------- 11. стек не ломается: F0 не двигает X ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x07, 0xF0, 0x01, 0x50]);
+    var r = m.run(100);
+    check('переключение банка не меняет X', r.x === 7, 'X=' + r.x);
+  })();
+
+  /* ---------- 12. описание команд ---------- */
+  (function () {
+    var n = MKExt61.extName(0x01);
+    var u = MKExt61.extName(0x77);
+    check('описание EXT-команд', n === 'банк 1' && u === 'неизвестная EXT-команда',
+          n + ' / ' + u);
+  })();
+
+  var sum = document.createElement('div');
+  sum.className = 'sum' + (fail ? ' bad' : '');
+  sum.textContent = 'Итог: ' + pass + ' прошло, ' + fail + ' провалилось';
+  document.body.appendChild(sum);
+  document.title = (fail ? '\u2718 ' : '\u2714 ') + 'ext61: ' + pass + '/' + (pass + fail);
+})();
+</script>
+</body>
+</html>
