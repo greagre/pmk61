@@ -100,7 +100,7 @@
     <a href="tests-library.html?v=2">Проверка библиотеки</a> ·
     <a href="tests-ext.html?v=15">Проверка расширения</a> ·
     <a href="tests-disasm.html?v=11">Проверка декодера</a> ·
-    <a href="tests-asm.html?v=1">Проверка ассемблера</a>
+    <a href="tests-asm.html?v=2">Проверка ассемблера</a>
   </div>
 </div>
 
@@ -170,7 +170,14 @@
      файл и забыть другой, браузер отдаст старый скрипт из кэша — и
      разъедется всё: панель банков (живёт в ext61-ui.js и вставляется
      ПЕРЕД #tabRegs, а не внутрь — иначе её сносит renderRegs из ui.js),
-     декодер и обработчик кликов по регистрам. -->
+     декодер и обработчик кликов по регистрам.
+
+     ВЕРСИИ ЭТОЙ ПРАВКИ (25.11.2026):
+       ui.js    3 — параметры профиля в create (адреса выше 99 включены),
+                    адрес перехода через core.jumpAddr, печать через
+                    core.addrShow, длина памяти из экземпляра ядра;
+       asm61.js 3 — разбор и запись адреса через профиль, «-0»…«-4» в тексте;
+       tests-asm 2 — 32 проверки, прошли 32/32. -->
 <script src="core.js?v=14"></script>
 <script src="profiles.js?v=14"></script>
 <script src="ext61.js?v=8"></script>
@@ -178,11 +185,11 @@
 
 <script src="profiles-ui.js?v=3"></script>
 <script src="ext61-boot.js?v=10"></script>
-<script src="ui.js?v=2"></script>
+<script src="ui.js?v=3"></script>
 <script src="shelf.js?v=2"></script>
 <script src="ext61-ui.js?v=9"></script>
 <script src="ext61-regs-click.js?v=4"></script>
-<script src="asm61.js?v=1"></script>
+<script src="asm61.js?v=3"></script>
 
 <script>
 /* Переключатель угла Р-ГРД-Г — как в 34-й:
