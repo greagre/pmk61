@@ -30,12 +30,13 @@
 <div id="out"></div>
 <div class="total" id="total">Идёт проверка…</div>
 <div class="note">Если что-то покраснело после правки — сначала проверь, что страница
-не из кэша: обнови адрес с другим числом в конце (<code>?v=2</code>, <code>?v=3</code>).</div>
+не из кэша: обнови адрес с другим числом в конце (<code>?v=4</code>, <code>?v=5</code>).
+Версия скриптов в этой сборке: core/profiles <code>v=15</code>, ext61/disasm61 <code>v=3</code>.</div>
 
-<script src="core.js?v=14"></script>
-<script src="profiles.js?v=14"></script>
-<script src="ext61.js?v=2"></script>
-<script src="disasm61.js?v=2"></script>
+<script src="core.js?v=15"></script>
+<script src="profiles.js?v=15"></script>
+<script src="ext61.js?v=3"></script>
+<script src="disasm61.js?v=3"></script>
 <script>
 (function () {
   'use strict';
@@ -77,6 +78,11 @@
   check('ядро знает isJumpCmd — правило трёх ячеек доступно',
     !!(window.MKCore && typeof window.MKCore.isJumpCmd === 'function'),
     window.MKCore ? 'MKCore.isJumpCmd есть' : 'нет — работает запасной список');
+
+  check('ext61.js свежий — F0 4F знает R0',
+    !!(window.MKExt61 && typeof window.MKExt61.extName === 'function' &&
+       window.MKExt61.extName(0x4F) === 'x→П 0 в банк-адресат'),
+    window.MKExt61 ? 'extName(4F)="' + window.MKExt61.extName(0x4F) + '"' : 'MKExt61 нет');
 
   /* ---------- 2. одна двухбайтная команда F0 ---------- */
   var r = D.rows([0xF0, 0x21, 0x50]);
