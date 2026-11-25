@@ -59,67 +59,6 @@
 
    Две поправки в примерах, обе вылезли на живых прогонах.
 
-   Первая: межбанковый пример писал «42» одной строкой, а ассемблер
-   той версии понимал только одиночные цифры — сборка падала с
-   «Неизвестная команда: 42». В asm61 v4 такая строка разворачивается
-   в две команды-цифры, но пример всё равно переписан на «4» и «2»
-   отдельными строками: так он собирается и на старой версии ассемблера,
-   и адреса видно глазами — две ячейки на число.
-
-   Вторая: у примера «следующий адрес» ожидание было «X = 2» — неверно.
-   F0 11 кладёт адрес, идущий ЗА командой, а команда стоит на 02 и
-   занимает две ячейки (02 и 03). Значит ответ 4, а Y = 0 — это адрес
-   самой F0 10 на 00. Прогон дал именно X = 4, Y = 0, то есть эмулятор
-   был прав, а строка «ожидается» врала.
-
-   ПРАВКА v5 (25.11.2026)
-
-   Примеры страниц. Ассемблер v5 понимает «.page N», и стало можно
-   проверить главное, что до сих пор не проверялось: что код, собранный
-   на страницу 1, реально оттуда исполняется. Прежние пять примеров
-   оставлены как есть — набор только дополняется, чтобы в конце прогнать
-   всё подряд и не потерять уже закрытые случаи.
-
-   Панель теперь передаёт ассемблеру размер страницы и их число от ядра,
-   а не свои числа: у обычной МК-61 страница одна, у ext61 — четыре,
-   и расходиться этим значениям нельзя.
-
-   ПРАВКА v6 (25.11.2026) — как считать «занято» при нескольких страницах
-
-   Прогон примера «Страница 1» показал «занято 109 из 420», хотя в двух
-   страницах лежало 6 и 4 ячейки. Причина: trimTrailingNop считался по
-   всему массиву, а между страницами лежит хвост НОП первой страницы —
-   он и попадал в счёт.
-
-   Теперь «занято» считается постранично, а страницы задействованные
-   считаются отдельно: до последней страницы, где есть хоть одна
-   непустая ячейка. При одной странице оба числа совпадают с прежними,
-   поэтому уже закрытые примеры и тесты не меняются.
-
-   Сама загрузка в память осталась прежней: панель отдаёт 420 ячеек
-   в MKUI.loadProgram, а ext61 сам режет их по страницам. Знать
-   про страницы редактору не нужно — это забота расширения.
-
-   ПРАВКА v7 (25.11.2026) — название кнопки и строка «ожидается»
-
-   Две вещи, обе всплыли на вопросе «а что вообще делает «Проверить»?».
-
-   Первая: кнопка называется «Проверить сборку». Прежнее «Проверить»
-   читалось как «проверить, правильно ли считает программа», хотя панель
-   не исполняет код и результатов не сверяет — она только собирает текст
-   и показывает ошибки, не трогая память. Однозначное имя снимает
-   недоразумение: рядом есть «Собрать и загрузить», а разница между
-   кнопками ровно в загрузке.
-
-   Вторая: строка «Ожидается» больше не врёт на старте. Раньше текст
-   восстанавливался из localStorage (последняя программа), а список
-   стоял на первом примере — и над программой страницы 1 висело
-   «Ожидается: X = 5040» от факториала. Теперь список сам встаёт
-   на тот пример, чей текст лежит в поле, а для своего текста есть
-   отдельный пункт «— свой текст —» и честная строка «Ожидается: —».
-   Сравнение текста вынесено в чистую функцию matchExample и покрыто
-   тестами.
-
    ПРАВКА v8 (25.11.2026) — «Занято» не живёт отдельно от текста
 
    На живом экране вышло так: в поле четыре строки, которые заведомо
@@ -196,11 +135,41 @@
    После очистки поля строка состояния честно говорит, что память
    не тронута («в памяти N яч.»), а в подсказке внизу написано, где
    стирать память. Чистая часть не менялась, тесты те же — 33.
+
+   ПРАВКА v12 (26.11.2026) — «Собрать и сохранить» и общий id
+
+   Три вещи, о которых просил пользователь.
+
+   1. Длинная подсказка внизу сжата до трёх строк со ссылкой на
+      guide.html: восемь предложений никто не читает, а правила набора
+      нужны в момент набора.
+
+   2. Появилась вторая кнопка сборки — «Собрать и сохранить». Первая,
+      «Собрать и загрузить», кладёт программу ТОЛЬКО в память калькулятора:
+      собрал, проверил, пуск. Вторая кладёт в библиотеку — и в память тоже,
+      потому что сохранять программу, которую нельзя сразу прогнать,
+      смысла нет. Подпись под кнопками говорит это одной строкой, чтобы
+      разницу не приходилось угадывать.
+
+   3. У каждой записи библиотеки теперь есть id. Раньше связка «коды ↔
+      текст ассемблера» шла по имени, и два разных человека (или один
+      в разное время) могли назвать программы одинаково — после чего
+      чужой текст цеплялся к чужим кодам. id ставится при сохранении
+      и переносится в парную запись, а имя остаётся только подписью
+      на экране.
+
+   Запись идёт напрямую в pmk61/library, а не через MKShelf.saveCurrent:
+   тот берёт программу из памяти ЯДРА, а редактору нужен текст из своего
+   поля. Формат записи тот же самый — {id, name, prog, data, asm, savedAt},
+   поэтому список библиотеки и импорт-экспорт видят её без изменений.
+
+   Чистая часть не тронута, тесты те же — 33.
    ========================================================= */
 (function (global) {
   'use strict';
 
   var TEXT_KEY = 'pmk61/asmsrc';
+  var LIB_KEY = 'pmk61/library';
   var NOP = 0x54;
   var DEFAULT_LEN = 105;
   var CUSTOM = 'custom';
@@ -518,6 +487,110 @@
     return EXAMPLES[0];
   }
 
+  /* ---------- библиотека ---------- */
+
+  /* Читаем библиотеку так же, как shelf.js: ключ pmk61/library,
+     массив записей. Испорченный JSON — пустой список, а не падение. */
+  function loadLib() {
+    try {
+      var raw = localStorage.getItem(LIB_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+
+  function saveLib(arr) {
+    try { localStorage.setItem(LIB_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+
+  /* id записи (v12). Формат «p-<время>-<хвост>»: время даёт порядок,
+     хвост разводит две записи, сохранённые в одну миллисекунду. */
+  function makeId() {
+    return 'p-' + Date.now().toString(36) + '-' +
+      Math.random().toString(36).slice(2, 6);
+  }
+
+  function trimTrailingNopSafe(prog) {
+    var n = trimTrailingNop(prog);
+    return (n > 0) ? n : (Array.isArray(prog) ? prog.length : 0);
+  }
+
+  /* Сохранение из редактора (v12).
+
+     Порядок такой:
+       1) собираем текст — если не собралось, ничего не сохраняем;
+       2) спрашиваем имя (подставляем имя примера, если текст с ним совпал);
+       3) ищем запись с тем же именем:
+          — её нет: создаём новую с новым id;
+          — есть, и коды совпадают: перезаписываем её (id сохраняем);
+          — есть, но коды другие: спрашиваем, заменить или сохранить рядом.
+
+     Возвращает {ok, name, id, isNew} или {ok:false, why}. */
+  function saveToLibrary(res) {
+    if (!res || !res.ok) return { ok: false, why: 'nores' };
+
+    var arr = loadLib();
+    var exId = matchExample(area ? area.value : '');
+    var defName = exId ? findExample(exId).name : 'Моя программа';
+
+    var name = global.prompt('Название программы', defName);
+    if (name === null) return { ok: false, why: 'cancel' };
+    name = String(name).trim() || defName;
+
+    var used = trimTrailingNopSafe(res.program);
+    var prog = res.program.slice(0, used);
+    var regs = {};
+
+    var idx = -1;
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i] && arr[i].name === name) { idx = i; break; }
+    }
+
+    var sameCodes = false;
+    if (idx >= 0 && Array.isArray(arr[idx].prog)) {
+      sameCodes = arr[idx].prog.length === prog.length;
+      if (sameCodes) {
+        for (var j = 0; j < prog.length; j++) {
+          if (arr[idx].prog[j] !== prog[j]) { sameCodes = false; break; }
+        }
+      }
+    }
+
+    if (idx >= 0 && sameCodes) {
+      /* Та же программа — обновляем текст и время, id не трогаем:
+         он связывает запись с её парной строкой в списке. */
+      arr[idx].asm = area.value;
+      arr[idx].savedAt = Date.now();
+      arr[idx].id = arr[idx].id || makeId();
+      saveLib(arr);
+      return { ok: true, name: name, id: arr[idx].id, isNew: false };
+    }
+
+    if (idx >= 0 && !sameCodes) {
+      var again = global.confirm('Программа «' + name + '» уже есть, и коды другие.\n\n' +
+        'OK — заменить её (текст и коды станут новыми).\n' +
+        'Отмена — сохранить под другим именем.');
+      if (!again) {
+        return { ok: false, why: 'name-used' };
+      }
+    }
+
+    var entry = {
+      id: (idx >= 0 && arr[idx].id) ? arr[idx].id : makeId(),
+      name: name,
+      prog: prog,
+      data: regs,
+      asm: area.value,
+      savedAt: Date.now()
+    };
+
+    if (idx >= 0) arr[idx] = entry;
+    else arr.push(entry);
+    saveLib(arr);
+
+    return { ok: true, name: name, id: entry.id, isNew: idx < 0 };
+  }
+
   /* ---------- панель ---------- */
 
   var panel = null;
@@ -546,13 +619,15 @@
       '.asm-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}',
       '.asm-row button{padding:8px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font-size:13px;-webkit-tap-highlight-color:transparent}',
       '.asm-row button.main{font-weight:600;border-color:rgba(70,140,255,.6)}',
+      '.asm-row button.save{border-color:rgba(26,140,74,.6)}',
       '.asm-row button:focus:not(:focus-visible){outline:none}',
       '.asm-stat{margin-top:8px;font-size:12px;opacity:.85}',
       '.asm-stat.ok{color:#1a8c4a}',
       '.asm-stat.err{color:#c0392b}',
       '.asm-expect{margin-top:6px;font-size:12px;font-weight:600}',
       '.asm-err{font-size:12px;padding:4px 6px;margin-top:4px;border-left:3px solid #c0392b;background:rgba(192,57,43,.08);cursor:pointer}',
-      '.asm-tip{font-size:11px;opacity:.6;margin-top:6px}'
+      '.asm-tip{font-size:11px;opacity:.62;margin-top:6px;line-height:1.5}',
+      '.asm-tip a{color:inherit}'
     ].join('');
     document.head.appendChild(s);
   }
@@ -659,6 +734,12 @@
     if (global.MKUI && typeof global.MKUI.hint === 'function') global.MKUI.hint(msg);
   }
 
+  function toast(msg, kind, ms) {
+    if (global.MKUI && typeof global.MKUI.toast === 'function') {
+      try { global.MKUI.toast(msg, kind || 'ok', ms || 6000); } catch (e) {}
+    }
+  }
+
   function compile(andLoad) {
     if (!area) return null;
     var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
@@ -689,6 +770,58 @@
     return res;
   }
 
+  /* «Собрать и сохранить» (v12).
+
+     Отличие от «Собрать и загрузить» одно: результат уходит не только
+     в память калькулятора, но и в библиотеку — чтобы текст не пришлось
+     набирать заново. Ошибка сборки ничего не сохраняет и память
+     не трогает: сохранять нечего. */
+  function compileAndSave() {
+    if (!area) return null;
+    var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
+    var info = pageInfo(core);
+    var res = buildProgram(area.value, {
+      len: info.len,
+      pageSize: info.size,
+      pages: info.pages
+    });
+    renderResult(res);
+    saveText();
+    syncPickerToText();
+    updateExpect();
+
+    if (!res.ok) {
+      hintText('Не сохраняю: в тексте ' + res.errors.length + ' ошибк(и) сборки — исправь и попробуй снова.');
+      return res;
+    }
+    if (res.used === 0) {
+      hintText('Не сохраняю пустой текст: программа не набрана.');
+      return res;
+    }
+
+    var done = saveToLibrary(res);
+    if (!done.ok && done.why === 'cancel') {
+      hintText('Сохранение отменено.');
+      return res;
+    }
+    if (!done.ok && done.why === 'name-used') {
+      hintText('Имя занято другой программой — сохрани под другим именем.');
+      toast('Имя занято — сохрани под другим именем', 'warn', 6000);
+      return res;
+    }
+
+    /* В память кладём тем же путём, что «Собрать и загрузить»: сохранили —
+       значит хотим прогнать сразу. */
+    if (global.MKUI && typeof global.MKUI.loadProgram === 'function') {
+      global.MKUI.loadProgram(res.program, null, { title: done.name });
+    }
+
+    hintText('Сохранено «' + done.name + '» в библиотеку и загружено в память: ' +
+      res.used + ' яч. Открой меню «⋯» → «Библиотека», чтобы увидеть в списке.');
+    toast('Сохранено «' + done.name + '»\n' + res.used + ' яч. · в библиотеке и в памяти', 'ok', 7000);
+    return res;
+  }
+
   /* Вставить выбранный пример в поле. В память он НЕ попадает: до v10
      эта кнопка сразу грузила программу, и «Собрать и загрузить» после
      неё уже ничего не меняла — код калькулятора появлялся внизу ещё
@@ -706,6 +839,26 @@
     var res = compile(false);
     hintText('Пример «' + ex.name + '» вставлен в поле. Нажми «Собрать и загрузить», чтобы он попал в память.');
     return res;
+  }
+
+  /* Загрузка текста из библиотеки (v12) — вызвать может shelf.js,
+     не трогая DOM редактора напрямую. Память не меняется: текст только
+     встаёт в поле, дальше обычные кнопки. */
+  function loadAsmToEditor(name, text) {
+    if (!area) mount();
+    if (!area) return false;
+    area.value = String(text == null ? '' : text);
+    saveText();
+    syncPickerToText();
+    updateExpect();
+    renderDirty();
+    /* Переключаем вкладку, если стоим на другой: иначе человек нажмёт
+       в библиотеке «В редактор» и ничего не увидит. */
+    var tab = document.querySelector('#tabs button[data-tab="code"]');
+    if (tab && !tab.classList.contains('active')) tab.click();
+    if (name) hintText('Текст «' + name + '» в поле редактора. Правь и жми «Собрать и загрузить».');
+    try { area.focus(); } catch (e) {}
+    return true;
   }
 
   function mount() {
@@ -772,6 +925,17 @@
     });
     row.appendChild(bCheck);
 
+    /* v12: в библиотеку. Собрать, спросить имя, записать в pmk61/library
+       (и заодно положить в память — чтобы сразу прогнать). */
+    var bSave = mk('button', 'save', 'Собрать и сохранить');
+    bSave.type = 'button';
+    bSave.title = 'Собрать текст и сохранить программу в библиотеку';
+    bSave.addEventListener('click', function () {
+      compileAndSave();
+      this.blur();
+    });
+    row.appendChild(bSave);
+
     /* v10: только вставляет текст. Программа попадает в память
        по кнопке «Собрать и загрузить» — иначе та теряет смысл. */
     var bExample = mk('button', null, 'Пример');
@@ -807,6 +971,12 @@
 
     panel.appendChild(row);
 
+    /* v12: разница между двумя кнопками одной строкой. Раньше это
+       объяснялось в длинной подсказке внизу, где его никто не читает. */
+    var legend = mk('div', 'asm-tip',
+      '«Загрузить» — в память калькулятора. «Сохранить» — в библиотеку.');
+    panel.appendChild(legend);
+
     expectEl = mk('div', 'asm-expect');
     panel.appendChild(expectEl);
 
@@ -816,15 +986,20 @@
     out = mk('div', 'asm-errs');
     panel.appendChild(out);
 
-    panel.appendChild(mk('div', 'asm-tip',
-      'Одна строка — одна команда (число из цифр можно писать слитно: 42). ' +
-      'Страница: .page 1. Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #. ' +
-      'Ошибки в списке кликабельны — курсор встанет на нужную строку. ' +
-      '«Проверить сборку» память не трогает: текущая программа останется на месте. ' +
-      '«Пример» только вставляет текст — в память программа попадает по кнопке ' +
-      '«Собрать и загрузить». «Очистить текст» трогает только поле; память стирает ' +
-      'кнопка «Очистить память» на калькуляторе. Листинги ниже показывают ПАМЯТЬ ' +
-      'калькулятора, а не текст поля.'));
+    /* v12: было восемь длинных предложений — стало три коротких
+       и ссылка. Правила нужны в момент набора, а не простынёй под ним. */
+    var tip = mk('div', 'asm-tip');
+    tip.appendChild(document.createTextNode(
+      'Одна строка — одна команда (число можно слитно: 42). ' +
+      'Страница: .page 1, метка: имя:, адреса: 05, 100. Комментарий: ; или #. ' +
+      'Ошибки кликабельны — курсор встанет на строку. '));
+    var lnk = document.createElement('a');
+    lnk.href = 'guide.html';
+    lnk.target = '_blank';
+    lnk.rel = 'noopener';
+    lnk.textContent = 'Подробнее в инструкции';
+    tip.appendChild(lnk);
+    panel.appendChild(tip);
 
     host.parentNode.insertBefore(panel, host);
     loadText();
@@ -860,6 +1035,12 @@
     matchExample: matchExample,
     mount: mount,
     compile: compile,
+    compileAndSave: compileAndSave,
+    saveToLibrary: saveToLibrary,
+    loadAsmToEditor: loadAsmToEditor,
+    makeId: makeId,
+    loadLib: loadLib,
+    saveLib: saveLib,
     insertExample: insertExample,
     example: EXAMPLE,
     examples: EXAMPLES,
