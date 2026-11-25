@@ -19,9 +19,10 @@
 
    ЧИСТАЯ ЧАСТЬ
 
-   buildProgram, trimTrailingNop, memoryLength и errorLines не трогают DOM
-   и проверяются страницей tests-editor.html — без калькулятора и без
-   клавиатуры. Порядок работы у нас такой: сначала тесты, потом интерфейс.
+   buildProgram, trimTrailingNop, memoryLength, errorLines и matchExample
+   не трогают DOM и проверяются страницей tests-editor.html — без
+   калькулятора и без клавиатуры. Порядок работы у нас такой: сначала
+   тесты, потом интерфейс.
 
    ДЛИНА ПАМЯТИ
 
@@ -98,6 +99,26 @@
    Сама загрузка в память осталась прежней: панель отдаёт 420 ячеек
    в MKUI.loadProgram, а ext61 v10 сам режет их по страницам. Знать
    про страницы редактору не нужно — это забота расширения.
+
+   ПРАВКА v7 (25.11.2026) — название кнопки и строка «ожидается»
+
+   Две вещи, обе всплыли на вопросе «а что вообще делает «Проверить»?».
+
+   Первая: кнопка называется «Проверить сборку». Прежнее «Проверить»
+   читалось как «проверить, правильно ли считает программа», хотя панель
+   не исполняет код и результатов не сверяет — она только собирает текст
+   и показывает ошибки, не трогая память. Однозначное имя снимает
+   недоразумение: рядом есть «Собрать и загрузить», а разница между
+   кнопками ровно в загрузке.
+
+   Вторая: строка «Ожидается» больше не врёт на старте. Раньше текст
+   восстанавливался из localStorage (последняя программа), а список
+   стоял на первом примере — и над программой страницы 1 висело
+   «Ожидается: X = 5040» от факториала. Теперь список сам встаёт
+   на тот пример, чей текст лежит в поле, а для своего текста есть
+   отдельный пункт «— свой текст —» и честная строка «Ожидается: —».
+   Сравнение текста вынесено в чистую функцию matchExample и покрыто
+   тестами.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -105,6 +126,7 @@
   var TEXT_KEY = 'pmk61/asmsrc';
   var NOP = 0x54;
   var DEFAULT_LEN = 105;
+  var CUSTOM = 'custom';
 
   /* ---------- чистая часть (проверяется tests-editor.html) ---------- */
 
@@ -181,6 +203,31 @@
   /* Есть ли у текущего ядра расширение: по нему выбираются примеры с F0. */
   function hasExt(core) {
     return !!(core && core.ext);
+  }
+
+  /* Текст для сравнения: единые переводы строк, без хвостовых пробелов
+     и без пустых строк по краям. Нужно, чтобы вставленный пример
+     узнавался и после того, как браузер чуть иначе сохранил переводы
+     строк, и чтобы случайный пробел в конце не сбивал список. */
+  function normSrc(s) {
+    return String(s == null ? '' : s)
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t]+$/gm, '')
+      .trim();
+  }
+
+  /* Чей текст сейчас в поле: id примера или null, если текст свой.
+     До v7 список стоял на первом примере всегда, и строка «Ожидается»
+     показывала чужие числа. Сравнение вынесено сюда, в чистую часть,
+     чтобы его можно было проверить тестом, а не глазами. */
+  function matchExample(text, examples) {
+    var list = (examples && examples.length) ? examples : EXAMPLES;
+    var t = normSrc(text);
+    if (!t) return null;
+    for (var i = 0; i < list.length; i++) {
+      if (normSrc(list[i].src) === t) return list[i].id;
+    }
+    return null;
   }
 
   /* Текст → программа, готовая для core.setProgram.
@@ -470,10 +517,24 @@
     });
   }
 
+  /* Список следует за текстом: если в поле лежит текст одного из
+     примеров — выбираем его, иначе «— свой текст —». Без этого на старте
+     список стоял на первом пункте, а в поле был текст прошлого сеанса,
+     и «Ожидается» показывало числа чужой программы. */
+  function syncPickerToText() {
+    if (!picker || !area) return;
+    picker.value = matchExample(area.value) || CUSTOM;
+  }
+
   /* Строка «ожидается» под кнопками: без неё прогон превращается
-     в угадывание — сошлось или нет. */
+     в угадывание — сошлось или нет. Для своего текста честно пишем,
+     что готового эталона нет. */
   function updateExpect() {
     if (!expectEl || !picker) return;
+    if (picker.value === CUSTOM) {
+      expectEl.textContent = 'Ожидается: — свой текст (сверься с комментариями в коде)';
+      return;
+    }
     var ex = findExample(picker.value);
     var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
     var text = 'Ожидается: ' + ex.expect;
@@ -492,6 +553,8 @@
     });
     renderResult(res);
     saveText();
+    syncPickerToText();
+    updateExpect();
 
     if (res.ok && andLoad && global.MKUI && typeof global.MKUI.loadProgram === 'function') {
       /* Отдаём все 420 ячеек: ext61 сам режет их по страницам (v10). */
@@ -510,9 +573,10 @@
      от выбора до результата два нажатия — пример и «Пуск». */
   function insertExample() {
     if (!area || !picker) return null;
-    var ex = findExample(picker.value);
+    var ex = findExample(picker.value === CUSTOM ? EXAMPLES[0].id : picker.value);
     area.value = ex.src;
     saveText();
+    syncPickerToText();
     updateExpect();
     return compile(true);
   }
@@ -538,6 +602,11 @@
       op.textContent = EXAMPLES[i].name;
       picker.appendChild(op);
     }
+    var opCustom = document.createElement('option');
+    opCustom.value = CUSTOM;
+    opCustom.textContent = '— свой текст —';
+    picker.appendChild(opCustom);
+
     picker.addEventListener('change', updateExpect);
     panel.appendChild(picker);
 
@@ -545,23 +614,33 @@
     area.id = 'asmSrc';
     area.spellcheck = false;
     area.placeholder = '7\nX→П 0\nБП 00\nС/П';
-    area.addEventListener('input', saveText);
+    area.addEventListener('input', function () {
+      saveText();
+      syncPickerToText();
+      updateExpect();
+    });
     panel.appendChild(area);
 
     var row = mk('div', 'asm-row');
 
     var bLoad = mk('button', 'main', 'Собрать и загрузить');
     bLoad.type = 'button';
+    bLoad.title = 'Собрать текст и положить программу в память калькулятора';
     bLoad.addEventListener('click', function () { compile(true); });
     row.appendChild(bLoad);
 
-    var bCheck = mk('button', null, 'Проверить');
+    /* Название говорит ровно то, что делает кнопка: собрать и проверить
+       текст, НЕ загружая его в память. Прежнее «Проверить» читалось как
+       «проверить результат программы», которого здесь нет. */
+    var bCheck = mk('button', null, 'Проверить сборку');
     bCheck.type = 'button';
+    bCheck.title = 'Собрать текст и показать ошибки, не трогая память калькулятора';
     bCheck.addEventListener('click', function () { compile(false); });
     row.appendChild(bCheck);
 
     var bExample = mk('button', null, 'Пример');
     bExample.type = 'button';
+    bExample.title = 'Вставить выбранный пример и сразу загрузить его в память';
     bExample.addEventListener('click', function () { insertExample(); });
     row.appendChild(bExample);
 
@@ -571,6 +650,8 @@
       if (!area) return;
       area.value = '';
       saveText();
+      syncPickerToText();
+      updateExpect();
       if (out) out.innerHTML = '';
       if (stat) { stat.className = 'asm-stat'; stat.textContent = ''; }
       area.focus();
@@ -590,10 +671,13 @@
 
     panel.appendChild(mk('div', 'asm-tip',
       'Одна строка — одна команда (число из цифр можно писать слитно: 42). ' +
-      'Страница: .page 1. Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #'));
+      'Страница: .page 1. Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #. ' +
+      'Ошибки в списке кликабельны — курсор встанет на нужную строку. ' +
+      '«Проверить сборку» память не трогает: текущая программа останется на месте.'));
 
     host.parentNode.insertBefore(panel, host);
     loadText();
+    syncPickerToText();
     updateExpect();
     return true;
   }
@@ -617,12 +701,15 @@
     pageInfo: pageInfo,
     errorLines: errorLines,
     hasExt: hasExt,
+    normSrc: normSrc,
+    matchExample: matchExample,
     mount: mount,
     compile: compile,
     insertExample: insertExample,
     example: EXAMPLE,
     examples: EXAMPLES,
-    NOP: NOP
+    NOP: NOP,
+    CUSTOM: CUSTOM
   };
 
   if (typeof document !== 'undefined') {
