@@ -22,6 +22,7 @@
      F0 41                расширение, два байта (префикс + второй байт)
      .3C                  байт напрямую по шестнадцатеричному коду
      БП 100               адрес выше 99: первая ячейка «·», вторая цифра
+     БП -3                то же самое, как адрес пишут на бумаге и на индикаторе
 
    ВАЖНО: одна строка — одна команда. «+ С/П» в одной строке не соберётся,
    это две команды и две строки.
@@ -36,6 +37,19 @@
    Латиница и кириллица приводятся к верхнему регистру, кроме греческой π
    (иначе она стала бы Π). Буква К и латинская K считаются одной и той же:
    ядро называет команды то так, то так, а человек набирает как удобно.
+
+   АДРЕСА — ИЗ ПРОФИЛЯ, А НЕ СВОИ
+
+   Правка v3 (25.11.2026): разбор адреса и его границы берутся из
+   MKProfiles (parseAddr, addrHigh, addrHighFirst, addrHighLast), если
+   профили подключены. Раньше здесь жило своё «n >= 100 → 0x0A, n - 100»
+   и свой предел 104 — то же самое, но ОТДЕЛЬНОЙ копией. Копии расходятся:
+   стоит профилю поменять формат «-0»…«-4», и листинг с ассемблером начнут
+   понимать адрес по-разному. Теперь правило одно.
+
+   Файл работает и БЕЗ profiles.js — тогда остаются прежние значения
+   (104, сто первым адресом, 0x0A первой ячейкой), чтобы тесты и
+   отдельное подключение не падали.
 
    ДВА ПРОХОДА
 
@@ -58,6 +72,13 @@
   var PREFIX = 0xF0;
   var MAX_ADDR = 104;
 
+  /* Код клавиши «•» (0x0A) — первая ячейка адреса выше 99.
+     Значение совпадает с таблицей кодов profiles.js. */
+  var HIGH_CELL = 0x0A;
+
+  /* Модель по умолчанию: её профиль задаёт формат адреса. */
+  var DEFAULT_MODEL = 'mk-61';
+
   /* Латиница и кириллица — в верхний регистр, греческая π не трогается:
      иначе она превратилась бы в Π. Минусы разных начертаний — к обычному. */
   function norm(s) {
@@ -79,6 +100,54 @@
       return table[key.toUpperCase()];
     }
     return undefined;
+  }
+
+  /* ---------- профиль (если подключён) ---------- */
+
+  function profileOf(model) {
+    var P = global.MKProfiles;
+    if (!P || typeof P.get !== 'function') return null;
+    return P.get(model || DEFAULT_MODEL) || null;
+  }
+
+  /* Последний допустимый адрес: у профиля свой, иначе 104. */
+  function maxAddrOf(p, o) {
+    if (typeof o.maxAddr === 'number') return o.maxAddr;
+    if (p && typeof p.addrHighLast === 'number') return p.addrHighLast;
+    return MAX_ADDR;
+  }
+
+  /* Разбор адреса из текста: «05», «100», «-3». Сначала — профиль,
+     он же решает, разрешены ли адреса выше 99 у этой модели. */
+  function parseAddress(t, p, model) {
+    var P = global.MKProfiles;
+    if (P && typeof P.parseAddr === 'function') {
+      var v = P.parseAddr(t, model || DEFAULT_MODEL);
+      if (typeof v === 'number' && v >= 0) return v;
+    }
+    if (/^\d+$/.test(t)) {
+      var n = parseInt(t, 10);
+      return isFinite(n) ? n : -1;
+    }
+    /* профилей нет — понимаем только «-0»…«-4» по прежним правилам */
+    if (/^-\d$/.test(t)) {
+      var hi = 100 + parseInt(t.charAt(1), 10);
+      return hi <= MAX_ADDR ? hi : -1;
+    }
+    return -1;
+  }
+
+  /* Адрес → две ячейки. У МК-61 адрес 100…104 пишется «•» + цифра,
+     обычный 00…99 — десятки и единицы. Границы берутся у профиля. */
+  function addrCells(n, p) {
+    var first = (p && typeof p.addrHighFirst === 'number') ? p.addrHighFirst : 100;
+    var high = p ? !!p.addrHigh : true;
+    if (high && n >= first) {
+      var d = n - first;
+      if (d > 9) return null;
+      return [HIGH_CELL, d];
+    }
+    return [Math.floor(n / 10), n % 10];
   }
 
   function stripComment(s) {
@@ -189,14 +258,19 @@
   }
 
   /* ---------- сборка ----------
-     assemble(src, {maxAddr, maxCells}) → {ok, cells, labels, errors, count}
+     assemble(src, {model, maxAddr, maxCells}) →
+       {ok, cells, labels, errors, count}
+
+     model — модель из profiles.js: от неё зависят формат и границы адреса.
 
      errors — массив {line, msg}; строка приведена, чтобы человек нашёл её
      в своём тексте. При ошибке cells всё равно отдаётся, но доверять
      адресам в нём нельзя: длина неверной строки неизвестна. */
   function assemble(src, opts) {
     var o = opts || {};
-    var maxAddr = typeof o.maxAddr === 'number' ? o.maxAddr : MAX_ADDR;
+    var model = o.model || DEFAULT_MODEL;
+    var p = profileOf(model);
+    var maxAddr = maxAddrOf(p, o);
     var maxCells = typeof o.maxCells === 'number' ? o.maxCells : 0;
 
     var lines = String(src == null ? '' : src).split(/\r?\n/);
@@ -250,16 +324,19 @@
         continue;
       }
 
-      /* переход: адрес числом или меткой */
+      /* переход: метка или адрес числом («05», «100», «-3») */
       var target = it.target;
       var n = null;
 
-      if (/^\d+$/.test(target)) {
-        n = parseInt(target, 10);
-      } else if (Object.prototype.hasOwnProperty.call(labels, target)) {
+      if (Object.prototype.hasOwnProperty.call(labels, target)) {
         n = labels[target];
       } else {
-        errors.push({ line: it.line, msg: 'Неизвестная метка: ' + target });
+        var parsed = parseAddress(target, p, model);
+        if (parsed >= 0) {
+          n = parsed;
+        } else {
+          errors.push({ line: it.line, msg: 'Неизвестная метка или адрес: ' + target });
+        }
       }
 
       if (n !== null && (n < 0 || n > maxAddr)) {
@@ -267,14 +344,20 @@
         n = null;
       }
 
+      var pair = null;
+      if (n !== null) {
+        pair = addrCells(n, p);
+        if (!pair) {
+          errors.push({ line: it.line, msg: 'Адрес ' + n + ' не записывается двумя ячейками' });
+          n = null;
+        }
+      }
+
       cells.push(it.code);
-      if (n === null) {
+      if (!pair) {
         cells.push(0x00, 0x00);
-      } else if (n >= 100) {
-        /* адрес выше 99: первая ячейка «·» (0x0A), вторая — цифра 0…4 */
-        cells.push(0x0A, n - 100);
       } else {
-        cells.push(Math.floor(n / 10), n % 10);
+        cells.push(pair[0], pair[1]);
       }
     }
 
@@ -292,8 +375,8 @@
   }
 
   /* Одна строка без меток — для быстрых проверок и подсказок. */
-  function line(text) {
-    var r = assemble(text, {});
+  function line(text, opts) {
+    var r = assemble(text, opts || {});
     if (!r.ok) return { ok: false, cells: [], error: r.errors[0] ? r.errors[0].msg : 'ошибка' };
     return { ok: true, cells: r.cells, error: '' };
   }
@@ -320,8 +403,11 @@
     toProgram: toProgram,
     norm: norm,
     regIndex: regIndex,
+    parseAddress: parseAddress,
+    profileOf: profileOf,
     tables: { simple: SIMPLE, range: RANGE, jumps: JUMPS },
     PREFIX: PREFIX,
-    MAX_ADDR: MAX_ADDR
+    MAX_ADDR: MAX_ADDR,
+    DEFAULT_MODEL: DEFAULT_MODEL
   };
 })(typeof window !== 'undefined' ? window : this);
