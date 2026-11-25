@@ -176,13 +176,15 @@
 
     /* ---------- межбанковый доступ ---------- */
 
-    /* банк-адресат задаётся числом в X: целое 0…3, иначе ЕГГ0Г.
-       X при этом не меняется — иначе команда портила бы вычисление. */
-    function setTarget() {
-      var v = core.ST.X;
-      if (typeof v !== 'number' || isNaN(v) || !isFinite(v)) return false;
-      var n = Math.round(v);
-      if (Math.abs(v - n) > 1e-9) return false;
+    /* Банк-адресат — целое 0…3. Без аргумента берётся из X (так работает
+       команда F0 05), с аргументом — прямо из JavaScript (для интерфейса
+       и тестов). X при установке не меняется: команда не должна портить
+       вычисление. */
+    function setTarget(v) {
+      var x = (v === undefined) ? core.ST.X : v;
+      if (typeof x !== 'number' || isNaN(x) || !isFinite(x)) return false;
+      var n = Math.round(x);
+      if (Math.abs(x - n) > 1e-9) return false;   /* дробный номер — ЕГГ0Г */
       if (n < 0 || n >= BANKS) return false;
       target = n;
       return true;
@@ -309,7 +311,7 @@
       selectBank: select,
       banksCount: function () { return BANKS; },
       targetBank: targetBank,
-      setTargetBank: function (n) { return setTarget.call(null, n); },
+      setTargetBank: function (n) { return setTarget(n); },
       step: stepExt,
       run: runExt,
       writeExt: writeExt,
