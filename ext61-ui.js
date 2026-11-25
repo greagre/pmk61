@@ -1,6 +1,6 @@
 /* =========================================================
    pmk61 / ext61-ui.js
-   Панель «Листинг расширения» + ввод EXT-команд.
+   Панель «Листинг расширения» + ввод EXT-команд + банки и переходы.
 
    ЗАЧЕМ ОТДЕЛЬНЫМ ФАЙЛОМ
 
@@ -23,6 +23,21 @@
    Пишется через writeExt(): две ячейки, префикс и второй байт,
    адрес сдвигается на две. Поэтому F0 21 не может превратиться
    в две самостоятельные команды.
+
+   ЧТО ДОБАВЛЕНО В v=2
+
+   1. Переключатель банка. Живёт НЕ внутри #tabRegs: ui.js полностью
+      перерисовывает эту панель в renderRegs(), и любые вложенные
+      кнопки сносились бы на каждом render(). Поэтому блок вставляется
+      перед панелью и обновляет подсветку сам.
+      Переключение идёт через ext.selectBank(n) — то же самое, что
+      команда F0 0n, только без записи в программу.
+   2. Журнал переходов банков и страниц. Журнал ui.js держит записи
+      в локальной переменной journal и наружу их не отдаёт, поэтому
+      свой список ведётся отдельно: step() ядра оборачивается, до
+      и после вызова сравниваются bank() и page(). Появляется строка
+      только когда банк или страница ДЕЙСТВИТЕЛЬНО сменились —
+      чистый прогон остаётся без лишнего шума.
 
    ДВА РАЗНЫХ ОТКАЗА
 
@@ -47,6 +62,16 @@
 
   var REG_CHARS = '0123456789abcde';
 
+  /* --- новое в v=2 --- */
+  var bankBox = null;
+  var bankBtns = [];
+  var tgtLabel = null;
+  var jumpBox = null;
+  var jumpBody = null;
+  var jumps = [];
+  var JUMP_MAX = 40;
+  var cssDone = false;
+
   function pad2(n) {
     var s = String(n | 0);
     return s.length < 2 ? '0' + s : s;
@@ -61,6 +86,30 @@
     return (global.MKUI && typeof global.MKUI.getCore === 'function')
       ? global.MKUI.getCore()
       : null;
+  }
+
+  function extOf(core) {
+    return (core && core.ext) ? core.ext : null;
+  }
+
+  /* ---------- стили ---------- */
+
+  function injectCss() {
+    if (cssDone || document.getElementById('ext61ui-css')) { cssDone = true; return; }
+    var st = document.createElement('style');
+    st.id = 'ext61ui-css';
+    st.textContent =
+      '.ext-bank{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:6px 8px 8px}' +
+      '.ext-bank button{min-width:36px;padding:5px 9px;font:inherit;border-radius:9px;' +
+        'border:1px solid rgba(0,0,0,.18);background:rgba(255,255,255,.55);cursor:pointer}' +
+      '.ext-bank button.on{background:#2e7d32;color:#fff;border-color:#2e7d32}' +
+      '.ext-cap{font-size:.85em;opacity:.75}' +
+      '.ext-jumps .jrow{display:flex;gap:8px;padding:2px 8px;font-size:.9em}' +
+      '.ext-jumps .jnum{opacity:.6;min-width:42px}' +
+      '.ext-jumps .jtxt{flex:1}' +
+      '.ext-jumps .logempty{padding:6px 8px;opacity:.7;font-size:.9em}';
+    document.head.appendChild(st);
+    cssDone = true;
   }
 
   /* ---------- список команд ---------- */
@@ -107,7 +156,7 @@
     schedule();
   }
 
-  /* ---------- построение панели ---------- */
+  /* ---------- построение панели листинга ---------- */
 
   function buildInput() {
     inp = document.createElement('div');
@@ -177,11 +226,183 @@
     return true;
   }
 
+  /* ---------- переключатель банка ---------- */
+
+  function ensureBankBox() {
+    if (bankBox && bankBox.parentNode) return true;
+    var regs = document.getElementById('tabRegs');
+    if (!regs || !regs.parentNode) return false;
+
+    injectCss();
+
+    bankBox = document.createElement('div');
+    bankBox.className = 'ext-bank';
+    bankBox.id = 'extBank';
+
+    var cap = document.createElement('span');
+    cap.className = 'ext-cap';
+    cap.textContent = 'Банк:';
+    bankBox.appendChild(cap);
+
+    bankBtns = [];
+    for (var i = 0; i < 4; i++) {
+      (function (n) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = String(n);
+        b.setAttribute('aria-label', 'Показать банк регистров ' + n);
+        b.addEventListener('click', function () { pickBank(n); });
+        bankBox.appendChild(b);
+        bankBtns.push(b);
+      })(i);
+    }
+
+    tgtLabel = document.createElement('span');
+    tgtLabel.className = 'ext-cap';
+    bankBox.appendChild(tgtLabel);
+
+    regs.parentNode.insertBefore(bankBox, regs);
+    return true;
+  }
+
+  function pickBank(n) {
+    var core = getCore();
+    var ext = extOf(core);
+    if (!ext || typeof ext.selectBank !== 'function') return;
+    if (!ext.selectBank(n)) return;
+    if (typeof core.changed === 'function') core.changed();
+    if (global.MKUI && typeof global.MKUI.hint === 'function') {
+      global.MKUI.hint('Банк регистров ' + n + ': на вкладке показаны R0…Re банка ' + n);
+    }
+    schedule();
+  }
+
+  function renderBankBox(core) {
+    if (!ensureBankBox()) return;
+    var ext = extOf(core);
+    bankBox.style.display = ext ? 'flex' : 'none';
+    if (!ext) return;
+
+    var cur = (typeof ext.bank === 'function') ? ext.bank() : 0;
+    bankBtns.forEach(function (b, i) { b.classList.toggle('on', i === cur); });
+    if (tgtLabel) {
+      var t = (typeof ext.targetBank === 'function') ? ext.targetBank() : 0;
+      tgtLabel.textContent = 'адресат: ' + t;
+    }
+  }
+
+  /* ---------- журнал переходов ---------- */
+
+  function ensureJumpBox() {
+    if (jumpBox && jumpBox.parentNode) return true;
+    var log = document.getElementById('log');
+    if (!log || !log.parentNode) return false;
+
+    injectCss();
+
+    jumpBox = document.createElement('div');
+    jumpBox.className = 'prog ext-jumps';
+    jumpBox.id = 'extJumpLog';
+
+    var head = document.createElement('div');
+    head.className = 'prog-head';
+    var l = document.createElement('span');
+    l.textContent = 'Переходы банков и страниц';
+    head.appendChild(l);
+
+    jumpBody = document.createElement('div');
+
+    jumpBox.appendChild(head);
+    jumpBox.appendChild(jumpBody);
+
+    log.parentNode.insertBefore(jumpBox, log.nextSibling);
+    return true;
+  }
+
+  function renderJumps() {
+    if (!ensureJumpBox()) return;
+    var ext = extOf(getCore());
+    jumpBox.style.display = ext ? '' : 'none';
+    if (!ext) return;
+
+    jumpBody.innerHTML = '';
+    if (!jumps.length) {
+      var e = document.createElement('div');
+      e.className = 'logempty';
+      e.textContent = 'Пусто. Здесь появятся смены банка (F0 0n) и перехода на другую страницу (F0 2n).';
+      jumpBody.appendChild(e);
+      return;
+    }
+
+    jumps.forEach(function (j) {
+      var row = document.createElement('div');
+      row.className = 'jrow';
+      var n = document.createElement('span');
+      n.className = 'jnum';
+      n.textContent = '#' + j.n;
+      var t = document.createElement('span');
+      t.className = 'jtxt';
+      t.textContent = j.txt;
+      var d = document.createElement('span');
+      d.className = 'jnum';
+      d.textContent = 'адр ' + pad2(j.ip);
+      row.appendChild(n);
+      row.appendChild(t);
+      row.appendChild(d);
+      jumpBody.appendChild(row);
+    });
+    jumpBody.scrollTop = jumpBody.scrollHeight;
+  }
+
+  function pushJump(core, b0, b1, p0, p1) {
+    var parts = [];
+    if (b0 !== b1) parts.push('банк ' + b0 + ' → ' + b1);
+    if (p0 !== p1) parts.push('страница ' + p0 + ' → ' + p1);
+    if (!parts.length) return;
+
+    jumps.push({
+      n: (core.ST && core.ST.steps) || 0,
+      txt: parts.join(' · '),
+      ip: (core.ST && core.ST.ip) || 0
+    });
+    if (jumps.length > JUMP_MAX) jumps.shift();
+    renderJumps();
+  }
+
+  /* Оборачиваем step(): журнал ui.js наружу записей не отдаёт, поэтому
+     смену банка и страницы отслеживаем сами — до и после шага. */
+  function hookCore(core) {
+    var ext = extOf(core);
+    if (!ext || typeof ext.bank !== 'function' || core.__extUiHooked) return;
+    core.__extUiHooked = true;
+
+    var base = core.step;
+    core.step = function () {
+      var b0 = ext.bank();
+      var p0 = (typeof ext.page === 'function') ? ext.page() : 0;
+      var r = base.apply(core, arguments);
+      var b1 = ext.bank();
+      var p1 = (typeof ext.page === 'function') ? ext.page() : 0;
+      if (b0 !== b1 || p0 !== p1) {
+        pushJump(core, b0, b1, p0, p1);
+        schedule();
+      }
+      return r;
+    };
+  }
+
+  /* ---------- отрисовка листинга ---------- */
+
   function render() {
     scheduled = false;
-    if (!ensureBox()) return;
-
     var core = getCore();
+
+    /* блоки банков и переходов не зависят от декодера */
+    renderBankBox(core);
+    renderJumps(core);
+    if (core) hookCore(core);
+
+    if (!ensureBox()) return;
 
     /* Ядро — отдельно: без него нет ни программы, ни адреса. */
     if (!core || !core.ST) {
@@ -244,10 +465,13 @@
     body.innerHTML = '';
     body.appendChild(frag);
 
-    var bank = (typeof core.bank === 'function') ? core.bank() : 0;
-    var page = (typeof core.page === 'function') ? core.page() : 0;
+    var ext = extOf(core);
+    var bank = ext ? ext.bank() : 0;
+    var page = ext ? ext.page() : 0;
+    var target = ext ? ext.targetBank() : 0;
+
     info.textContent = 'F0: ' + extCount + ' · занято ' + used + ' из ' + total +
-      ' · банк ' + bank + ' · страница ' + page;
+      ' · банк ' + bank + ' · страница ' + page + (ext ? ' · адресат ' + target : '');
     if (atLabel) atLabel.textContent = '→ адрес ' + pad2(ip);
   }
 
@@ -294,6 +518,8 @@
   global.MKExtUI = {
     refresh: schedule,
     render: render,
-    write: writeSelected
+    write: writeSelected,
+    selectBank: pickBank,
+    jumps: function () { return jumps.slice(); }
   };
 })(typeof window !== 'undefined' ? window : this);
