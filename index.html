@@ -149,20 +149,29 @@
 })();
 </script>
 
-<!-- Расширение подключается ДО ui.js: он создаёт ядро синхронно,
-     и ext61-boot.js должен успеть подменить фабрику.
-     Версии v=6 единые для всех файлов расширения: если поднять один
-     файл и забыть другой, панель и декодер разойдутся. -->
+<!-- ПОРЯДОК ПОДКЛЮЧЕНИЯ ВАЖЕН.
+
+     1. core.js → profiles.js: база ядра и коды команд.
+     2. ext61.js → disasm61.js: расширение и декодер (ядро и листинг).
+     3. profiles-ui.js: раскладки и список моделей, в т. ч. «МК-61 (расширенный)».
+     4. ext61-boot.js: ПОСЛЕ раскладок и ДО ui.js — он смотрит выбранную
+        модель и отдаёт ui.js настоящее ядро (обёртка расширения живёт
+        отдельно, иначе интерфейс падает и клавиатура не строится).
+     5. ui.js → shelf.js → ext61-ui.js: интерфейс, библиотека, панель F0.
+
+     Версии у файлов расширения поднимаются ВМЕСТЕ: если обновить один
+     и забыть другой, панель и декодер разойдутся, а браузер покажет
+     старые скрипты из кэша. -->
 <script src="core.js?v=13"></script>
 <script src="profiles.js?v=13"></script>
-<script src="ext61.js?v=6"></script>
-<script src="disasm61.js?v=6"></script>
-<script src="ext61-boot.js?v=6"></script>
+<script src="ext61.js?v=7"></script>
+<script src="disasm61.js?v=7"></script>
 
-<script src="profiles-ui.js?v=1"></script>
+<script src="profiles-ui.js?v=2"></script>
+<script src="ext61-boot.js?v=7"></script>
 <script src="ui.js?v=1"></script>
 <script src="shelf.js?v=1"></script>
-<script src="ext61-ui.js?v=6"></script>
+<script src="ext61-ui.js?v=7"></script>
 
 <script>
 /* Переключатель угла Р-ГРД-Г — как в 34-й:
