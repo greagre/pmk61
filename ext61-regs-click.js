@@ -9,8 +9,8 @@
    Правила:
      • режим выбора (после x→П / П→X) не перехватываем —
        там работает родной обработчик ui.js;
-     • под сеткой показываем строку-подсказку, чтобы
-       кликабельность не была сюрпризом;
+     • никаких текстов в интерфейс не добавляем: правило
+       «клик пишет X» живёт в документации, а не на экране;
      • ui.js не трогаем: работаем через MutationObserver
        на #tabRegs, ячейки пересоздаются при каждой отрисовке.
    ========================================================= */
@@ -18,7 +18,6 @@
   'use strict';
 
   var MK = window.MKCore || {};
-  var NOTE_ID = 'regsClickNote';
   var box = document.getElementById('tabRegs');
   if (!box) return;
 
@@ -41,18 +40,6 @@
       if (String(names[i]).toLowerCase() === n) return i;
     }
     return -1;
-  }
-
-  function ensureNote() {
-    if (document.getElementById(NOTE_ID)) return;
-    var d = document.createElement('div');
-    d.id = NOTE_ID;
-    d.style.cssText = 'margin-top:8px;padding:8px 10px;border-radius:8px;' +
-      'font-size:12px;line-height:1.35;' +
-      'background:rgba(120,140,120,.12);color:inherit;opacity:.85';
-    d.textContent = 'Клик по регистру — записать X в него. ' +
-      'Прочитать: П→X, затем регистр. Клик в режиме выбора (после x→П) — как обычно выбор адреса.';
-    box.appendChild(d);
   }
 
   function bind() {
@@ -86,17 +73,12 @@
     });
   }
 
-  function refresh() {
-    ensureNote();
-    bind();
-  }
-
-  var obs = new MutationObserver(function () { refresh(); });
+  var obs = new MutationObserver(function () { bind(); });
   obs.observe(box, { childList: true });
 
   /* подстраховка: после переключения вкладок и смены модели */
-  document.addEventListener('click', function () { setTimeout(refresh, 0); }, true);
-  window.addEventListener('mk-model-change', function () { setTimeout(refresh, 0); });
+  document.addEventListener('click', function () { setTimeout(bind, 0); }, true);
+  window.addEventListener('mk-model-change', function () { setTimeout(bind, 0); });
 
-  refresh();
+  bind();
 })();
