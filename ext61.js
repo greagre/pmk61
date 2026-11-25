@@ -103,16 +103,19 @@
 
   /* ---------- вспомогательное ---------- */
 
+  /* точка входа — МЛАДШАЯ цифра второго байта (0…15),
+     именно поэтому сюда нельзя передавать весь байт целиком */
   function regChar(lo) {
     return (lo === REG_F) ? '0' : REG_CHARS.charAt(lo & 0x0F);
   }
 
   function describe(second) {
     var s = second & 0xFF;
+    var lo = s & 0x0F;
     if (NAMES[s]) return NAMES[s];
     if (s >= 0x20 && s <= 0x23) return 'страница ' + (s & 0x03);
-    if (s >= 0x40 && s <= 0x4F) return 'x→П ' + regChar(s) + ' в банк-адресат';
-    if (s >= 0x60 && s <= 0x6F) return 'П→x ' + regChar(s) + ' из банка-адресата';
+    if (s >= 0x40 && s <= 0x4F) return 'x→П ' + regChar(lo) + ' в банк-адресат';
+    if (s >= 0x60 && s <= 0x6F) return 'П→x ' + regChar(lo) + ' из банка-адресата';
     return 'неизвестная EXT-команда';
   }
 
