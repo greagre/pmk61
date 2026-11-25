@@ -1,8 +1,8 @@
 /* =========================================================
    pmk61 / ext61-ui.js
-   Панель «Листинг расширения» в интерфейсе эмулятора.
+   Панель «Листинг расширения» + ввод EXT-команд.
 
-   ЗАЧЕМ ОНА ОТДЕЛЬНЫМ ФАЙЛОМ
+   ЗАЧЕМ ОТДЕЛЬНЫМ ФАЙЛОМ
 
    Штатный листинг строит ui.js, и он про префикс 0xF0 ничего не знает:
    для него каждая ячейка — одна команда. Править ui.js ради этого не
@@ -16,17 +16,13 @@
    содержимое этого узла, значит наблюдатель срабатывает ровно тогда,
    когда программа или её состояние изменились. Никаких таймеров.
 
-   ЧТО ПОКАЗЫВАЕТ
+   ВВОД КОМАНД
 
-   Адрес, код и человеческое название для каждой строки, включая
-   двухбайтные команды расширения. Пустые ячейки в конце не рисуются:
-   показывается занятая часть плюс небольшой запас.
-
-   ВАЖНО
-
-   Панель только ЧИТАЕТ программу. Она ничего не исполняет и не меняет
-   поведение калькулятора: эмулятор по-прежнему работает на ядре core.js,
-   а ext61 подключается отдельно, когда появятся кнопки ввода F0.
+   Выбираешь команду в списке и жмёшь «Записать» — она ложится в
+   программу по текущему адресу, ровно как обычный набор в ПРГ.
+   Пишется через writeExt(): две ячейки, префикс и второй байт,
+   адрес сдвигается на две. Поэтому F0 21 не может превратиться
+   в две самостоятельные команды.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -35,11 +31,21 @@
   var box = null;
   var body = null;
   var info = null;
+  var inp = null;
+  var sel = null;
+  var atLabel = null;
   var observer = null;
   var scheduled = false;
 
+  var REG_CHARS = '0123456789abcde';
+
   function pad2(n) {
     var s = String(n | 0);
+    return s.length < 2 ? '0' + s : s;
+  }
+
+  function hex2(n) {
+    var s = (n & 0xFF).toString(16).toUpperCase();
     return s.length < 2 ? '0' + s : s;
   }
 
@@ -47,6 +53,87 @@
     return (global.MKUI && typeof global.MKUI.getCore === 'function')
       ? global.MKUI.getCore()
       : null;
+  }
+
+  /* ---------- список команд ---------- */
+
+  function commandList() {
+    var list = [
+      [0x00, 'банк 0'], [0x01, 'банк 1'], [0x02, 'банк 2'], [0x03, 'банк 3'],
+      [0x04, 'банк → X'], [0x05, 'банк-адресат ← X'], [0x06, 'банк-адресат → X'],
+      [0x10, 'адрес → X'], [0x11, 'следующий адрес → X'],
+      [0x20, 'страница 0'], [0x21, 'страница 1'], [0x22, 'страница 2'], [0x23, 'страница 3'],
+      [0x24, 'страница → X']
+    ];
+    var i;
+    for (i = 0; i < REG_CHARS.length; i++) {
+      list.push([0x40 + i, 'x→П R' + REG_CHARS.charAt(i) + ' в банк-адресат']);
+    }
+    for (i = 0; i < REG_CHARS.length; i++) {
+      list.push([0x60 + i, 'П→x R' + REG_CHARS.charAt(i) + ' из банка-адресата']);
+    }
+    return list;
+  }
+
+  /* ---------- запись ---------- */
+
+  function writeSelected() {
+    var core = getCore();
+    if (!core || !sel) return;
+
+    var ext = core.ext;
+    if (!ext || typeof ext.writeExt !== 'function') {
+      if (info) info.textContent = 'ядро без расширения — проверь порядок скриптов';
+      return;
+    }
+
+    var second = parseInt(sel.value, 10);
+    var at = core.ST.ip | 0;
+    if (!ext.writeExt(second)) return;
+
+    if (typeof core.changed === 'function') core.changed();
+    if (global.MKUI && typeof global.MKUI.hint === 'function') {
+      global.MKUI.hint('Записано F0 ' + hex2(second) + ' по адресу ' + pad2(at) +
+        ' (две ячейки: ' + pad2(at) + ' и ' + pad2((at + 1) % core.PROG_LEN) + ')');
+    }
+    schedule();
+  }
+
+  /* ---------- построение панели ---------- */
+
+  function buildInput() {
+    inp = document.createElement('div');
+    inp.className = 'ext-input';
+    inp.style.display = 'flex';
+    inp.style.gap = '6px';
+    inp.style.alignItems = 'center';
+    inp.style.flexWrap = 'wrap';
+    inp.style.padding = '6px 8px 8px';
+
+    atLabel = document.createElement('span');
+    atLabel.style.fontSize = '0.85em';
+    atLabel.style.opacity = '0.75';
+
+    sel = document.createElement('select');
+    sel.setAttribute('aria-label', 'Команда расширения');
+    sel.style.flex = '1 1 200px';
+    sel.style.minWidth = '0';
+
+    commandList().forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = String(o[0]);
+      opt.textContent = 'F0 ' + hex2(o[0]) + ' — ' + o[1];
+      sel.appendChild(opt);
+    });
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Записать';
+    btn.addEventListener('click', writeSelected);
+
+    inp.appendChild(sel);
+    inp.appendChild(btn);
+    inp.appendChild(atLabel);
   }
 
   function ensureBox() {
@@ -74,6 +161,9 @@
 
     box.appendChild(head);
     box.appendChild(body);
+
+    buildInput();
+    box.appendChild(inp);
 
     prog.parentNode.insertBefore(box, prog.nextSibling);
     return true;
@@ -136,7 +226,11 @@
     body.innerHTML = '';
     body.appendChild(frag);
 
-    info.textContent = 'F0: ' + extCount + ' · занято ' + used + ' из ' + total;
+    var bank = (typeof core.bank === 'function') ? core.bank() : 0;
+    var page = (typeof core.page === 'function') ? core.page() : 0;
+    info.textContent = 'F0: ' + extCount + ' · занято ' + used + ' из ' + total +
+      ' · банк ' + bank + ' · страница ' + page;
+    if (atLabel) atLabel.textContent = '→ адрес ' + pad2(ip);
   }
 
   function schedule() {
@@ -181,6 +275,7 @@
 
   global.MKExtUI = {
     refresh: schedule,
-    render: render
+    render: render,
+    write: writeSelected
   };
 })(typeof window !== 'undefined' ? window : this);
