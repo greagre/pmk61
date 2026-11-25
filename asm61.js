@@ -1,0 +1,298 @@
+/* =========================================================
+   pmk61 / asm61.js
+   Ассемблер: текст → ячейки программной памяти МК-61.
+
+   ЗАЧЕМ
+
+   disasm61.js умеет обратное: ячейки → строки листинга. Вместе они
+   образуют замкнутый круг «собрал → разобрал → сравнил», и это главный
+   способ проверки: если собранная строка после декодера выглядит так же,
+   как исходная, значит команда описана верно.
+
+   Никакого DOM, никакого исполнения. Только текст и числа — поэтому файл
+   проверяется обычной страницей тестов, без калькулятора.
+
+   СИНТАКСИС
+
+     ; комментарий        до конца строки, # работает так же
+     metka:               метка на текущий адрес (можно несколько подряд)
+     +                    простая команда, один байт
+     x→П 4                команда с номером регистра, один байт
+     БП metka             переход: три ячейки — команда, десятки, единицы
+     F0 41                расширение, два байта (префикс + второй байт)
+     .3C                  байт напрямую по шестнадцатеричному коду
+     БП 100               адрес выше 99: первая ячейка «·», вторая цифра
+
+   Имена команд — ровно те, что отдаёт MKCore.cmdName: язык ассемблера
+   и язык листинга не могут разойтись. Тест «покрытие» перебирает все
+   коды, которые ядро умеет называть, собирает каждое имя и проверяет,
+   что получился тот же код.
+
+   ДВА ПРОХОДА
+
+   Первый: посчитать адреса и запомнить метки. Длина команды известна
+   заранее — один байт, два у F0, три у перехода, поэтому считать можно,
+   не зная адресов. Второй: подставить вместо имён чисел.
+
+   Один проход тут не работает: метка может стоять НИЖЕ ссылки на неё,
+   а в МК-61 переход вперёд — обычное дело (циклы, ветвления).
+
+   ЧЕГО ФАЙЛ НЕ ДЕЛАЕТ
+
+   Не загружает программу в ядро и не знает про страницы расширения —
+   это дело интерфейса: он берёт готовый массив cells и отдаёт
+   core.setProgram(). Страницы появятся тогда же, когда появится редактор.
+   ========================================================= */
+(function (global) {
+  'use strict';
+
+  var PREFIX = 0xF0;
+  var MAX_ADDR = 104;
+
+  /* Латинские буквы — в верхний регистр, русские не трогаем:
+     иначе π превратилась бы в греческую Π. Минус приводим к обычному. */
+  function norm(s) {
+    var t = String(s == null ? '' : s);
+    t = t.replace(/[\u2212\u2013\u2014]/g, '-');
+    t = t.replace(/[a-z]/g, function (ch) { return ch.toUpperCase(); });
+    t = t.replace(/\s+/g, ' ');
+    return t.replace(/^\s+|\s+$/g, '');
+  }
+
+  function stripComment(s) {
+    var i = s.indexOf(';');
+    var j = s.indexOf('#');
+    var k = -1;
+    if (i >= 0) k = i;
+    if (j >= 0 && (k < 0 || j < k)) k = j;
+    return k < 0 ? s : s.slice(0, k);
+  }
+
+  /* ---------- таблицы ----------
+     Простые команды: ровно по одному байту, аргумента нет.
+     Ключи записаны уже нормализованными (латиница в верхнем регистре). */
+  var SIMPLE = {
+    '0': 0x00, '1': 0x01, '2': 0x02, '3': 0x03, '4': 0x04,
+    '5': 0x05, '6': 0x06, '7': 0x07, '8': 0x08, '9': 0x09,
+    '·': 0x0A, '•': 0x0A, '.': 0x0A,
+    '/-/': 0x0B, 'ВП': 0x0C, 'CX': 0x0D, 'В↑': 0x0E, 'ВX': 0x0F, 'ВХ': 0x0F,
+    '+': 0x10, '-': 0x11, '*': 0x12, '×': 0x12, '/': 0x13, '÷': 0x13, '↔': 0x14,
+    '10^X': 0x15, 'E^X': 0x16, 'LG': 0x17, 'LN': 0x18,
+    'ARCSIN': 0x19, 'ARCCOS': 0x1A, 'ARCTG': 0x1B,
+    'SIN': 0x1C, 'COS': 0x1D, 'TG': 0x1E,
+    'π': 0x20, '√': 0x21, 'X²': 0x22, 'X^2': 0x22, '1/X': 0x23, 'X^Y': 0x24,
+    'F◯': 0x25,
+    'K °→′': 0x26, 'K °→′″': 0x2A, 'K °←′″': 0x30, 'K °←′': 0x33,
+    'K ЗН': 0x32, 'K |X|': 0x31, 'K [X]': 0x34, 'K {X}': 0x35, 'K MAX': 0x36,
+    'K AND': 0x37, 'K OR': 0x38, 'K XOR': 0x39, 'K ИНВ': 0x3A,
+    'K СЧ': 0x3B, 'ОШИБКА': 0x3C, 'K °→′″ (ДУБЛЬ)': 0x3D, 'Y→X': 0x3E,
+    'С/П': 0x50, 'В/О': 0x52, 'К НОП': 0x54, 'НОП': 0x54,
+    'К 1': 0x55, 'К 2': 0x56
+  };
+
+  /* Команды с номером регистра в младшей цифре кода. */
+  var RANGE = {
+    'X→П': 0x40, 'П→X': 0x60,
+    'K X≠0': 0x70, 'K БП': 0x80, 'K X≥0': 0x90, 'K ПП': 0xA0,
+    'K X→П': 0xB0, 'K X<0': 0xC0, 'K П→X': 0xD0, 'K X=0': 0xE0
+  };
+
+  /* Переходы: три ячейки, после кода идут десятки и единицы адреса. */
+  var JUMPS = {
+    'БП': 0x51, 'ПП': 0x53,
+    'F X≠0': 0x57, 'F X≥0': 0x59, 'F X<0': 0x5C, 'F X=0': 0x5E,
+    'F L0': 0x5D, 'F L1': 0x5B, 'F L2': 0x58, 'F L3': 0x5A
+  };
+
+  /* Номера регистров: цифры и буквы a…e. Цифра F в коде тоже означает R0,
+     но в тексте её писать не нужно — «x→П 0» собирается в 0x40. */
+  var REGS = {
+    '0': 0, '1': 1, '2': 2, '3': 3, '4': 4,
+    '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+    'A': 10, 'B': 11, 'C': 12, 'D': 13, 'E': 14
+  };
+
+  function regIndex(tok) {
+    if (tok === undefined || tok === null) return -1;
+    var t = norm(tok);
+    if (Object.prototype.hasOwnProperty.call(REGS, t)) return REGS[t];
+    return -1;
+  }
+
+  function itemLen(it) {
+    if (it.type === 'ext') return 2;
+    if (it.type === 'jump') return 3;
+    return 1;
+  }
+
+  /* Разбор одной команды (без меток и комментариев). */
+  function parseCmd(text) {
+    var t = norm(text);
+    if (!t) return null;
+
+    var m = /^F0 ([0-9A-F]{2})$/.exec(t);
+    if (m) return { type: 'ext', bytes: [PREFIX, parseInt(m[1], 16)] };
+
+    m = /^\.([0-9A-F]{2})$/.exec(t);
+    if (m) return { type: 'byte', bytes: [parseInt(m[1], 16)] };
+
+    if (Object.prototype.hasOwnProperty.call(SIMPLE, t)) {
+      return { type: 'byte', bytes: [SIMPLE[t]] };
+    }
+
+    var sp = t.lastIndexOf(' ');
+    if (sp > 0) {
+      var name = t.slice(0, sp);
+      var arg = t.slice(sp + 1);
+
+      if (Object.prototype.hasOwnProperty.call(RANGE, name)) {
+        var r = regIndex(arg);
+        if (r < 0) return { type: 'err', msg: 'Неверный номер регистра: ' + arg };
+        return { type: 'byte', bytes: [RANGE[name] | r] };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(JUMPS, name)) {
+        return { type: 'jump', code: JUMPS[name], target: norm(arg) };
+      }
+    }
+
+    return { type: 'err', msg: 'Неизвестная команда: ' + text.trim() };
+  }
+
+  /* ---------- сборка ----------
+     assemble(src, {maxAddr, maxCells}) → {ok, cells, labels, errors, count}
+
+     errors — массив {line, msg}; строка приведена, чтобы человек нашёл её
+     в своём тексте. При ошибке cells всё равно отдаётся, но доверять
+     адресам в нём нельзя: длина неверной строки неизвестна. */
+  function assemble(src, opts) {
+    var o = opts || {};
+    var maxAddr = typeof o.maxAddr === 'number' ? o.maxAddr : MAX_ADDR;
+    var maxCells = typeof o.maxCells === 'number' ? o.maxCells : 0;
+
+    var lines = String(src == null ? '' : src).split(/\r?\n/);
+    var items = [];
+    var labels = {};
+    var errors = [];
+    var addr = 0;
+
+    for (var li = 0; li < lines.length; li++) {
+      var raw = lines[li];
+      var body = stripComment(raw);
+      if (!body || !body.replace(/\s+/g, '')) continue;
+
+      /* метки: их может быть несколько подряд перед командой */
+      var guard = 0;
+      var m;
+      while (guard++ < 20 && (m = /^\s*([^\s:]+)\s*:\s*([\s\S]*)$/.exec(body))) {
+        var name = norm(m[1]);
+        if (!name) {
+          errors.push({ line: li + 1, msg: 'Пустое имя метки' });
+        } else if (/^\d+$/.test(name)) {
+          errors.push({ line: li + 1, msg: 'Метка не может быть числом: ' + m[1] });
+        } else if (Object.prototype.hasOwnProperty.call(labels, name)) {
+          errors.push({ line: li + 1, msg: 'Метка уже определена: ' + name });
+        } else {
+          labels[name] = addr;
+        }
+        body = m[2];
+      }
+
+      if (!body || !body.trim()) continue;
+
+      var item = parseCmd(body);
+      if (!item) continue;
+      if (item.type === 'err') {
+        errors.push({ line: li + 1, msg: item.msg });
+        continue;
+      }
+      item.line = li + 1;
+      item.addr = addr;
+      addr += itemLen(item);
+      items.push(item);
+    }
+
+    var cells = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+
+      if (it.type === 'byte' || it.type === 'ext') {
+        for (var b = 0; b < it.bytes.length; b++) cells.push(it.bytes[b]);
+        continue;
+      }
+
+      /* переход: адрес числом или меткой */
+      var target = it.target;
+      var n = null;
+
+      if (/^\d+$/.test(target)) {
+        n = parseInt(target, 10);
+      } else if (Object.prototype.hasOwnProperty.call(labels, target)) {
+        n = labels[target];
+      } else {
+        errors.push({ line: it.line, msg: 'Неизвестная метка: ' + target });
+      }
+
+      if (n !== null && (n < 0 || n > maxAddr)) {
+        errors.push({ line: it.line, msg: 'Адрес ' + n + ' вне предела 0…' + maxAddr });
+        n = null;
+      }
+
+      cells.push(it.code);
+      if (n === null) {
+        cells.push(0x00, 0x00);
+      } else if (n >= 100) {
+        /* адрес выше 99: первая ячейка «·» (0x0A), вторая — цифра 0…4 */
+        cells.push(0x0A, n - 100);
+      } else {
+        cells.push(Math.floor(n / 10), n % 10);
+      }
+    }
+
+    if (maxCells && cells.length > maxCells) {
+      errors.push({ line: 0, msg: 'Программа занимает ' + cells.length + ' ячеек, а помещается ' + maxCells });
+    }
+
+    return {
+      ok: errors.length === 0,
+      cells: cells,
+      labels: labels,
+      errors: errors,
+      count: cells.length
+    };
+  }
+
+  /* Одна строка без меток — для быстрых проверок и подсказок. */
+  function line(text) {
+    var r = assemble(text, {});
+    if (!r.ok) return { ok: false, cells: [], error: r.errors[0] ? r.errors[0].msg : 'ошибка' };
+    return { ok: true, cells: r.cells, error: '' };
+  }
+
+  /* Готовый массив для core.setProgram: длина памяти, пустые шаги — NOP. */
+  function toProgram(cells, opts) {
+    var o = opts || {};
+    var len = o.len > 0 ? Math.round(o.len) : 105;
+    var nop = typeof o.nop === 'number' ? (o.nop & 0xFF) : 0x54;
+    var out = new Array(len);
+    for (var i = 0; i < len; i++) out[i] = nop;
+    if (Array.isArray(cells)) {
+      for (var j = 0; j < cells.length && j < len; j++) {
+        var c = cells[j];
+        if (typeof c === 'number' && isFinite(c)) out[j] = Math.max(0, Math.min(255, Math.round(c)));
+      }
+    }
+    return out;
+  }
+
+  global.MKAsm = {
+    assemble: assemble,
+    line: line,
+    toProgram: toProgram,
+    norm: norm,
+    regIndex: regIndex,
+    tables: { simple: SIMPLE, range: RANGE, jumps: JUMPS },
+    PREFIX: PREFIX,
+    MAX_ADDR: MAX_ADDR
+  };
+})(typeof window !== 'undefined' ? window : this);
