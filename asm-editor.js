@@ -43,6 +43,15 @@
    (например −3999) — цикл F L0 уходил в 20 000 шагов и «ЕГГОГ» вместо
    ответа. Теперь пример сам кладёт 7 в X первой строкой, поэтому
    «Собрать и загрузить» → «Пуск» даёт 5040 без всякой подготовки.
+
+   ПРАВКА v3 (25.11.2026)
+
+   Один пример стал списком: факториал, номер страницы, следующий адрес,
+   раздельность банков и межбанковый доступ. Каждый пример несёт строку
+   «ожидается …» — она видна под кнопками, чтобы результат было с чем
+   сравнить, а не гадать, что должно было выйти. Программы с F0 работают
+   только в режиме расширения; на обычной МК-61 ядро справедливо ругнётся
+   на префикс.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -87,6 +96,11 @@
     return len * pages;
   }
 
+  /* Есть ли у текущего ядра расширение: по нему выбираются примеры с F0. */
+  function hasExt(core) {
+    return !!(core && core.ext);
+  }
+
   /* Текст → программа, готовая для core.setProgram.
      Возвращает {ok, errors, cells, program, count, used, labels}.
      При ошибке program пустой: загружать его нельзя — адреса в cells
@@ -123,25 +137,112 @@
     };
   }
 
-  /* ---------- встроенный пример ---------- */
+  /* ---------- примеры ---------- */
 
-  /* Счётчик кладём сами: первая строка — 7, дальше X→П 0 забирает её
-     в R0. Без этой строки программа брала бы в счётчик случайное X. */
-  var EXAMPLE = [
-    '; 7! — программа сама кладёт 7 в счётчик R0',
-    '7',
-    'X→П 0',
-    '1',
-    'X→П 1',
-    'loop:',
-    'П→X 1',
-    'П→X 0',
-    '×',
-    'X→П 1',
-    'F L0 loop',
-    'П→X 1',
-    'С/П'
-  ].join('\n');
+  /* Первый пример — факториал: он проверяет ассемблер, память, переход
+     F L0 и стек сразу, без всякого расширения. Остальные — по одной
+     возможности ext61, чтобы сбой сразу показывал, что именно не так.
+     Комментарии ассемблер вырезает, поэтому строка «ожидается» в тексте
+     ни на сборку, ни на адреса не влияет. */
+  var EXAMPLES = [
+    {
+      id: 'fact',
+      name: '7! — факториал',
+      expect: 'X = 5040',
+      ext: false,
+      src: [
+        '; 7! — программа сама кладёт 7 в счётчик R0',
+        '; ожидается X = 5040 после С/П',
+        '7',
+        'X→П 0',
+        '1',
+        'X→П 1',
+        'loop:',
+        'П→X 1',
+        'П→X 0',
+        '×',
+        'X→П 1',
+        'F L0 loop',
+        'П→X 1',
+        'С/П'
+      ].join('\n')
+    },
+    {
+      id: 'page',
+      name: 'F0 24 — номер страницы',
+      expect: 'X = 0, шагов 2',
+      ext: true,
+      src: [
+        '; «страница → X»: доказательство, что ядро исполняет F0,',
+        '; а не проглатывает префикс как НОП',
+        '; ожидается X = 0 (текущая страница — нулевая)',
+        'F0 24',
+        'С/П'
+      ].join('\n')
+    },
+    {
+      id: 'addr',
+      name: 'F0 11 — следующий адрес',
+      expect: 'X = 2, Y = 0',
+      ext: true,
+      src: [
+        '; «адрес этой команды → X» и «адрес следующей → X»',
+        '; F0 10 стоит на 00, F0 11 — на 02, значит ответ 2',
+        '; ожидается X = 2, Y = 0',
+        'F0 10',
+        'F0 11',
+        'С/П'
+      ].join('\n')
+    },
+    {
+      id: 'banks',
+      name: 'Банки — раздельность',
+      expect: 'X = 7',
+      ext: true,
+      src: [
+        '; банк 0: R0 = 7, банк 1: R0 = 8, потом назад в банк 0',
+        '; если банки не раздельны, выйдет 8',
+        '; ожидается X = 7',
+        '7',
+        'X→П 0',
+        'F0 01',
+        '8',
+        'X→П 0',
+        'F0 00',
+        'П→X 0',
+        'С/П'
+      ].join('\n')
+    },
+    {
+      id: 'target',
+      name: 'Межбанк — F0 40 / F0 60',
+      expect: 'X = 42, R0 = 0',
+      ext: true,
+      src: [
+        '; F0 05 берёт банк-адресат ИЗ X, поэтому 1 кладём первой',
+        '; F0 40 — x→П R0 в банк-адресат, текущий банк не меняется',
+        '; ожидается X = 42, R0 текущего банка = 0',
+        '1',
+        'F0 05',
+        '42',
+        'F0 40',
+        '0',
+        'X→П 0',
+        'F0 60',
+        'С/П'
+      ].join('\n')
+    }
+  ];
+
+  /* Совместимость: старое имя осталось, тесты и внешний код его знают. */
+  var EXAMPLE = EXAMPLES[0].src;
+
+  function findExample(id) {
+    for (var i = 0; i < EXAMPLES.length; i++) {
+      if (EXAMPLES[i].id === id) return EXAMPLES[i];
+    }
+    return EXAMPLES[0];
+  }
 
   /* ---------- панель ---------- */
 
@@ -149,6 +250,8 @@
   var area = null;
   var out = null;
   var stat = null;
+  var picker = null;
+  var expectEl = null;
 
   function mk(tag, cls, text) {
     var d = document.createElement(tag);
@@ -170,6 +273,9 @@
       'line-height:1.45;padding:8px;border-radius:8px;',
       'border:1px solid rgba(127,127,127,.4);background:rgba(0,0,0,.06);',
       'color:inherit;resize:vertical}',
+      '.asm-panel select{width:100%;box-sizing:border-box;margin-bottom:8px;",
+      'padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);',
+      'background:transparent;color:inherit;font-size:13px}'.replace('",', '"'),
       '.asm-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}',
       '.asm-row button{padding:8px 12px;border-radius:8px;',
       'border:1px solid rgba(127,127,127,.5);background:transparent;',
@@ -179,6 +285,7 @@
       '.asm-stat{margin-top:8px;font-size:12px;opacity:.85}',
       '.asm-stat.ok{color:#1a8c4a}',
       '.asm-stat.err{color:#c0392b}',
+      '.asm-expect{margin-top:6px;font-size:12px;font-weight:600;opacity:.9}',
       '.asm-err{font-size:12px;padding:4px 6px;margin-top:4px;',
       'border-left:3px solid #c0392b;background:rgba(192,57,43,.08);cursor:pointer}',
       '.asm-tip{font-size:11px;opacity:.6;margin-top:6px}'
@@ -233,6 +340,17 @@
     });
   }
 
+  /* Строка «ожидается» под кнопками: без неё прогон превращается
+     в угадывание — сошлось или нет. */
+  function updateExpect() {
+    if (!expectEl || !picker) return;
+    var ex = findExample(picker.value);
+    var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
+    var text = 'Ожидается: ' + ex.expect;
+    if (ex.ext && core && !hasExt(core)) text += ' · нужен режим расширения';
+    expectEl.textContent = text;
+  }
+
   function compile(andLoad) {
     if (!area) return null;
     var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
@@ -249,6 +367,17 @@
     return res;
   }
 
+  /* Вставить выбранный пример, сразу собрать и положить в память:
+     от выбора до результата два нажатия — пример и «Пуск». */
+  function insertExample() {
+    if (!area || !picker) return null;
+    var ex = findExample(picker.value);
+    area.value = ex.src;
+    saveText();
+    updateExpect();
+    return compile(true);
+  }
+
   function mount() {
     if (panel && panel.parentNode) return true;
     if (document.getElementById('asmPanel')) return true;
@@ -261,6 +390,17 @@
     panel = mk('div', 'asm-panel');
     panel.id = 'asmPanel';
     panel.appendChild(mk('h3', null, 'Ассемблер: текст → память'));
+
+    picker = document.createElement('select');
+    picker.id = 'asmExample';
+    for (var i = 0; i < EXAMPLES.length; i++) {
+      var op = document.createElement('option');
+      op.value = EXAMPLES[i].id;
+      op.textContent = EXAMPLES[i].name;
+      picker.appendChild(op);
+    }
+    picker.addEventListener('change', updateExpect);
+    panel.appendChild(picker);
 
     area = document.createElement('textarea');
     area.id = 'asmSrc';
@@ -283,12 +423,7 @@
 
     var bExample = mk('button', null, 'Пример');
     bExample.type = 'button';
-    bExample.addEventListener('click', function () {
-      if (!area) return;
-      area.value = EXAMPLE;
-      saveText();
-      compile(false);
-    });
+    bExample.addEventListener('click', function () { insertExample(); });
     row.appendChild(bExample);
 
     var bClear = mk('button', null, 'Очистить поле');
@@ -305,6 +440,9 @@
 
     panel.appendChild(row);
 
+    expectEl = mk('div', 'asm-expect');
+    panel.appendChild(expectEl);
+
     stat = mk('div', 'asm-stat');
     panel.appendChild(stat);
 
@@ -316,6 +454,7 @@
 
     host.parentNode.insertBefore(panel, host);
     loadText();
+    updateExpect();
     return true;
   }
 
@@ -334,9 +473,12 @@
     trimTrailingNop: trimTrailingNop,
     memoryLength: memoryLength,
     errorLines: errorLines,
+    hasExt: hasExt,
     mount: mount,
     compile: compile,
+    insertExample: insertExample,
     example: EXAMPLE,
+    examples: EXAMPLES,
     NOP: NOP
   };
 
