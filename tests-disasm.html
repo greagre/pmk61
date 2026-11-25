@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmk61 — проверка декодера</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 18px 14px 40px; background: #f5f6f8; color: #1c2126; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: #6b7480; font-size: 13px; margin-bottom: 16px; }
+  .case { background: #fff; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+          border-left: 4px solid #d3d8de; font-size: 13px; line-height: 1.45; }
+  .ok { border-left-color: #2e9e5b; }
+  .bad { border-left-color: #d94a4a; background: #fff5f5; }
+  .head { font-weight: 600; margin-bottom: 3px; }
+  .fact { color: #6b7480; font-size: 12px; font-family: ui-monospace, Consolas, monospace;
+          white-space: pre-wrap; margin-top: 3px; }
+  .total { margin-top: 16px; padding: 12px 14px; border-radius: 10px; background: #fff;
+           font-size: 15px; font-weight: 600; }
+  .total.bad { background: #fff0f0; color: #b32d2d; }
+  .total.ok { background: #eefaf2; color: #1d7a44; }
+</style>
+</head>
+<body>
+<h1>Декодер листинга · pmk61</h1>
+<div class="sub">Проверка disasm61.js. Двухбайтные команды F0 не должны разрываться и сдвигать адреса.</div>
+<div id="out"></div>
+<div class="total" id="total">Идёт проверка…</div>
+
+<script src="core.js?v=13"></script>
+<script src="profiles.js?v=13"></script>
+<script src="ext61.js?v=1"></script>
+<script src="disasm61.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var total = document.getElementById('total');
+  var pass = 0, fail = 0;
+
+  function check(name, ok, fact) {
+    if (ok) pass++; else fail++;
+    var d = document.createElement('div');
+    d.className = 'case ' + (ok ? 'ok' : 'bad');
+    var h = document.createElement('div');
+    h.className = 'head';
+    h.textContent = (ok ? '✓ ' : '✗ ') + name;
+    d.appendChild(h);
+    if (fact) {
+      var f = document.createElement('div');
+      f.className = 'fact';
+      f.textContent = fact;
+      d.appendChild(f);
+    }
+    out.appendChild(d);
+  }
+
+  function mk(arr) {
+    var p = new Array(105).fill(0);
+    for (var i = 0; i < arr.length; i++) p[i] = arr[i];
+    return p;
+  }
+
+  /* ---------- 1. свежесть ---------- */
+  check('disasm61.js загружен',
+    !!(window.MKDasm && typeof window.MKDasm.rows === 'function'),
+    window.MKDasm ? 'MKDasm.rows есть' : 'MKDasm нет — обнови страницу');
+
+  var D = window.MKDasm;
+  if (!D) {
+    total.textContent = 'Декодер не загрузился';
+    total.className = 'total bad';
+    return;
+  }
+
+  /* ---------- 2. одна двухбайтная команда ---------- */
+  var r = D.rows(mk([0xF0, 0x21, 0x50]), { length: 3 });
+  check('F0 21 — одна строка на две ячейки',
+    r.length === 2 && r[0].len === 2 && r[0].kind === 'ext',
+    'строк=' + r.length + ', длина первой=' + (r[0] && r[0].len));
+  check('F0 21 — название «страница 1»',
+    r[0].text === 'страница 1', 'text="' + r[0].text + '"');
+  check('F0 21 — адрес следующей строки 02',
+    r[1].addr === 2, 'addr=' + r[1].addr);
+  check('F0 21 — второй байт не показан отдельной командой',
+    r[0].code === 'F0 21', 'code="' + r[0].code + '"');
+
+  /* ---------- 3. межбанковые ---------- */
+  var r40 = D.rows(mk([0xF0, 0x40]), { length: 2 });
+  check('F0 40 — x→П 0 в банк-адресат',
+    r40[0].text.indexOf('x→П') === 0, 'text="' + r40[0].text + '"');
+
+  var r60 = D.rows(mk([0xF0, 0x60]), { length: 2 });
+  check('F0 60 — П→x 0 из банка-адресата',
+    r60[0].text.indexOf('П→x') === 0, 'text="' + r60[0].text + '"');
+
+  var r4f = D.rows(mk([0xF0, 0x4F]), { length: 2 });
+  check('F0 4F — это R0 (как в таблице кодов)',
+    r4f[0].text === 'x→П 0 в банк-адресат', 'text="' + r4f[0].text + '"');
+
+  var r05 = D.rows(mk([0xF0, 0x05]), { length: 2 });
+  check('F0 05 — банк-адресат ← X',
+    r05[0].text === 'банк-адресат ← X', 'text="' + r05[0].text + '"');
+
+  /* ---------- 4. мусор второго байта ---------- */
+  var r30 = D.rows(mk([0xF0, 0x30]), { length: 2 });
+  check('F0 30 — неизвестная EXT-команда, но строка одна',
+    r30.length === 1 && r30[0].len === 2 && r30[0].text === 'неизвестная EXT-команда',
+    'строк=' + r30.length + ', text="' + r30[0].text + '"');
+
+  /* ---------- 5. обычные команды ---------- */
+  var r50 = D.rows(mk([0x50]), { length: 1 });
+  check('0x50 — обычная однобайтная команда',
+    r50[0].len === 1 && r50[0].kind === 'cmd', 'len=' + r50[0].len);
+
+  var r7 = D.rows(mk([0x07, 0x41]), { length: 2 });
+  check('две обычные команды — две строки',
+    r7.length === 2 && r7[1].addr === 1, 'строк=' + r7.length);
+
+  /* ---------- 6. смешанная программа ---------- */
+  var mix = mk([0x05, 0x40, 0xF0, 0x02, 0x09, 0x40, 0x50]);
+  var rm = D.rows(mix, { length: 7 });
+  var addrs = rm.map(function (x) { return x.addr; }).join(',');
+  check('смесь F0 и обычных — без разрывов',
+    addrs === '0,1,2,4,5,6', 'адреса=' + addrs);
+
+  /* ---------- 7. сумма длин ---------- */
+  var sum = rm.reduce(function (a, x) { return a + x.len; }, 0);
+  check('сумма длин равна длине участка',
+    sum === 7, 'сумма=' + sum + ', участок=7');
+
+  /* ---------- 8. F0 в последней ячейке ---------- */
+  var tail = new Array(4).fill(0);
+  tail[3] = 0xF0;
+  var rt = D.rows(tail, { length: 4 });
+  check('F0 в последней ячейке — второй байт по кругу',
+    rt[0].kind === 'ext' && rt[0].code === 'F0 00',
+    'code="' + rt[0].code + '"');
+
+  /* ---------- 9. used ---------- */
+  check('used считает занятые ячейки, а не всю память',
+    D.used(mk([0x05, 0x40]), { length: 105 }) === 2,
+    'used=' + D.used(mk([0x05, 0x40]), { length: 105 }));
+
+  check('used учитывает двухбайтную команду как две ячейки',
+    D.used(mk([0xF0, 0x21]), { length: 105 }) === 2,
+    'used=' + D.used(mk([0xF0, 0x21]), { length: 105 }));
+
+  /* ---------- 10. пустая программа ---------- */
+  check('пустая программа — пустой листинг',
+    D.rows(mk([]), { length: 105 }).length === 0,
+    'строк=' + D.rows(mk([]), { length: 105 }).length);
+
+  /* ---------- итог ---------- */
+  total.textContent = 'Итог: ' + pass + ' прошло, ' + fail + ' провалилось';
+  total.className = 'total ' + (fail ? 'bad' : 'ok');
+  document.title = 'pmk61 — декодер ' + pass + '/' + (pass + fail);
+})();
+</script>
+</body>
+</html>
