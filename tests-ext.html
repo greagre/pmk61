@@ -13,16 +13,18 @@
   .fail { color: #b42318; font-weight: 600; }
   .sum { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #f4f4f4; font-weight: 600; }
   .sum.bad { background: #fdecea; }
+  .note { color: #555; font-size: 0.9rem; }
   code { font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
 <h1>ext61 — тесты расширения</h1>
 <p>Открывать прямо из папки проекта: нужны <code>profiles.js</code>, <code>core.js</code>, <code>ext61.js</code>.</p>
+<p class="note">Версии в ссылках (<code>?v=13</code>) нужны, чтобы браузер не подсовывал старые копии скриптов. Меняй цифру при каждой правке ядра или расширения.</p>
 <ol id="out"></ol>
-<script src="profiles.js"></script>
-<script src="core.js"></script>
-<script src="ext61.js"></script>
+<script src="profiles.js?v=13"></script>
+<script src="core.js?v=13"></script>
+<script src="ext61.js?v=13"></script>
 <script>
 (function () {
   var out = document.getElementById('out');
@@ -37,6 +39,27 @@
   }
 
   function fresh() { return MKExt61.create({}); }
+
+  /* ---------- 0. свежесть загруженного ext61.js ----------
+     Если браузер отдал старую копию, дальше пойдут загадочные
+     провалы. Поэтому первым делом проверяем, что в файле есть
+     страницы и банк-адресат. */
+  (function () {
+    if (typeof MKExt61 === 'undefined' || typeof MKExt61.create !== 'function') {
+      check('свежая копия ext61.js', false, 'ext61.js не загрузился вовсе');
+      return;
+    }
+    var m = fresh();
+    var ok = typeof m.selectPage === 'function' &&
+             typeof m.page === 'function' &&
+             typeof m.setTargetBank === 'function' &&
+             typeof m.targetBank === 'function' &&
+             m.PAGES === 4;
+    check('свежая копия ext61.js (страницы, банк-адресат)',
+          ok,
+          ok ? 'PAGES=' + m.PAGES + ', функции на месте'
+             : 'загружена старая копия — обнови страницу (кэш)');
+  })();
 
   /* ---------- 1. регрессия: обычная программа без F0 ---------- */
   (function () {
