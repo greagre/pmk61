@@ -1,5 +1,5 @@
 /* =========================================================
-   pmk61 / ext61-boot.js  (v=9)
+   pmk61 / ext61-boot.js  (v=10)
    Включение расширения БЕЗ правки ui.js — через выбор модели.
 
    ЧТО БЫЛО СЛОМАНО (v1)
@@ -27,6 +27,9 @@
       жалобой: «F0 не на цифровой панели»).
    5. После ввода обеих цифр слой тоже остаётся main: можно сразу
       набирать следующую команду, ничего не переключая.
+   6. Ссылка может сразу открыть нужную модель: index.html?model=mk-61-ext.
+      Это нужно тестам и закладкам — иначе после проверки расширения
+      эмулятор открывается обычным МК-61 и выбор приходится делать руками.
 
    КАК НАБИРАЕТСЯ КОМАНДА
 
@@ -39,9 +42,8 @@
 
    Второй байт двухзначный: первая цифра — старшая, вторая — младшая.
    Кнопок для A…F в раскладке нет, поэтому набираются только байты,
-   состоящие из обычных цифр: 00…06, 10, 11, 20…24, 40…4F и 60…6F
-   без букв (то есть банк-адресат доступен для R0…R9); регистры R a…R F
-   пока вводятся только через панель «Записать».
+   состоящие из обычных цифр: 00…06, 10, 11, 20…24, 40…49 и 60…69;
+   регистры R a…R e пока вводятся только через панель «Записать».
 
    ПОРЯДОК ПОДКЛЮЧЕНИЯ ВАЖЕН
 
@@ -185,10 +187,56 @@
     core.writeExt = function (second) { return ext.writeExt(second); };
     core.extBank = function () { return ext.bank ? ext.bank() : 0; };
     core.extPage = function () { return ext.page ? ext.page() : 0; };
-    core.extBackToDigits = function () { backToDigits(core); };
+    core.extBackToDigits = function () { return backToDigits(core); };
 
     attachInput(core, ext);
 
     return core;
   };
+
+  /* ---------- модель из адресной строки ---------- */
+
+  /* ?model=mk-61-ext открывает расширенную модель сразу.
+     Дожидаемся окончания загрузки: список моделей строит ui.js,
+     а он подключается ПОСЛЕ этого файла. */
+  function applyUrlModel() {
+    try {
+      var m = null;
+      var mm = /[?&]model=([^&]+)/.exec(String(global.location.search || ''));
+      if (mm) m = decodeURIComponent(mm[1]);
+      if (!m) return;
+
+      var sel = document.getElementById('model');
+      if (!sel || !sel.options) return;
+      if (sel.value === m) return;
+
+      var has = false;
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === m) { has = true; break; }
+      }
+      if (!has) return;
+
+      sel.value = m;
+      var ev = null;
+      try {
+        ev = new Event('change', { bubbles: true });
+      } catch (err) {
+        ev = document.createEvent('Event');
+        ev.initEvent('change', true, true);
+      }
+      sel.dispatchEvent(ev);
+    } catch (err) { /* ссылка без параметра — обычное поведение */ }
+  }
+
+  function scheduleUrlModel() {
+    global.setTimeout(applyUrlModel, 0);
+  }
+
+  if (global.document) {
+    if (global.document.readyState === 'loading') {
+      global.document.addEventListener('DOMContentLoaded', scheduleUrlModel);
+    } else {
+      scheduleUrlModel();
+    }
+  }
 })(typeof window !== 'undefined' ? window : this);
