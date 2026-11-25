@@ -187,7 +187,13 @@
                      в счётчик: «Собрать и загрузить» → «Пуск» даёт 5040
                      без подготовки регистров (было: счётчик брался из X,
                      и цикл уходил в лимит шагов);
-       tests-editor 1 — 26 проверок чистой части редактора, без DOM. -->
+       tests-editor 1 — 26 проверок чистой части редактора, без DOM;
+       ext61-ui   10 — код перехода в панели расширения печатается как
+                     «5D 03», одним форматом с основным листингом ui.js
+                     (было «5D 00 03» — та же программа выглядела по-разному).
+                     Это исправление жило в файле, но было не видно: в index.html
+                     оставалось подключение v=9 и браузер отдавал старую копию
+                     из кэша. Теперь v=10 подключён явно. -->
 <script src="core.js?v=14"></script>
 <script src="profiles.js?v=14"></script>
 <script src="ext61.js?v=8"></script>
@@ -197,7 +203,7 @@
 <script src="ext61-boot.js?v=10"></script>
 <script src="ui.js?v=3"></script>
 <script src="shelf.js?v=2"></script>
-<script src="ext61-ui.js?v=9"></script>
+<script src="ext61-ui.js?v=10"></script>
 <script src="ext61-regs-click.js?v=4"></script>
 <script src="asm61.js?v=3"></script>
 <script src="asm-editor.js?v=2"></script>
