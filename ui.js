@@ -4,8 +4,31 @@
    Отличия от 34-й ровно три:
      1. раскладки берутся из window.MKUI_MODELS (здесь — МК-61);
      2. ключи памяти с префиксом pmk61/;
-     3. ядро своё (core.js ревизии 6), создаётся без параметров —
+     3. ядро своё (core.js ревизии 7), создаётся без параметров —
         у него умолчания линии 61: 105 шагов, 15 регистров, K-функции.
+
+   ПРАВКА v3 (25.11.2026) — адреса выше 99 и страницы:
+
+   1. Ядро создаётся С ПАРАМЕТРАМИ ПРОФИЛЯ (coreOptions). Раньше звали
+      MKCore.create({ onEvent }) — и в core.js оставалось ADDR_HIGH = false.
+      Из-за этого jumpAddr всегда возвращал −1, и листинг рисовал «→ ??»
+      даже там, где адрес есть. Профиль mk-61 разрешает адреса 100…104,
+      значит теперь они включены и у обычной МК-61.
+
+   2. Адрес перехода больше НЕ считается здесь (было a*10+b). Логика
+      одна и живёт в ядре: core.jumpAddr(i) понимает и обычные 00…99,
+      и 100…104 (первая ячейка «•» 0x0A, вторая — цифра 0…4), и даёт −1
+      там, где адрес битый. Две разные арифметики адреса — это источник
+      расхождений, и его больше нет.
+
+   3. Печать адреса — core.addrShow: «00»…«99» и «-0»…«-4», как на
+      индикаторе. pad2 для адресов больше не используется (pad2 остался
+      только для номера программы в метке).
+
+   4. Длина памяти берётся у ЭКЗЕМПЛЯРА ядра (core.PROG_LEN), а не из
+      глобального MK.PROG_LEN. У расширения память страничная: четыре
+      страницы по 105, адреса внутри страницы двузначные — поэтому
+      в листинге показывается «занято N из 105 · страница k/4 (всего 420)».
 
    Два режима:
      work  — «Работа»: корпус, дисплей, клавиатура, Пуск/Сброс.
@@ -86,6 +109,26 @@
   var progMeta = null;   /* { num: 1, title: 'n! — факториал' } или null */
 
   /* ---------- модели ---------- */
+
+  /* Параметры ядра из профиля модели. Раньше их не передавали вовсе,
+     и ядро работало с умолчаниями — без адресов выше 99, потому что
+     ADDR_HIGH в core.js включается ТОЛЬКО явно. Профиль mk-61 адреса
+     100…104 разрешает, значит передавать их обязательно. */
+  function coreOptions(id) {
+    var o = { onEvent: onEvent };
+    var P = window.MKProfiles;
+    var p = (P && typeof P.get === 'function') ? P.get(id) : null;
+    if (!p) return o;
+    if (p.progLen > 0) o.progLen = p.progLen;
+    if (p.regCount > 0) o.regCount = p.regCount;
+    if (typeof p.nop === 'number') o.nop = p.nop;
+    if (p.maxDig > 0) o.maxDig = p.maxDig;
+    if (typeof p.addrHigh === 'boolean') o.addrHigh = p.addrHigh;
+    if (typeof p.addrHighFirst === 'number') o.addrHighFirst = p.addrHighFirst;
+    if (typeof p.addrHighLast === 'number') o.addrHighLast = p.addrHighLast;
+    return o;
+  }
+
   function buildModelList() {
     var ids = Object.keys(MODELS);
     el.model.innerHTML = '';
@@ -104,7 +147,7 @@
     storeKey = STORE_KEY + id;
     nameKey = NAME_KEY + id;
     el.modelName.textContent = profile.model || profile.title || id;
-    core = window.MKCore.create({ onEvent: onEvent });
+    core = window.MKCore.create(coreOptions(id));
     pick = null;
     stepCount = 0;
     journal = [];
@@ -260,6 +303,27 @@
     return s.length < 2 ? '0' + s : s;
   }
 
+  /* Адрес для человека: «00»…«99» и «-0»…«-4». Печать живёт в ядре,
+     чтобы листинг и индикатор не разошлись. */
+  function addrText(n) {
+    if (core && typeof core.addrShow === 'function') return core.addrShow(n);
+    return pad2(n);
+  }
+
+  /* Страница программы — только у расширения (ext61.js).
+     У обычной МК-61 памяти страничной нет и подпись не нужна. */
+  function pageText() {
+    if (!core || !core.ext || typeof core.ext.page !== 'function') return '';
+    var total = (typeof core.ext.pagesCount === 'function') ? core.ext.pagesCount() : 0;
+    if (!total) return '';
+    return 'страница ' + (core.ext.page() + 1) + '/' + total;
+  }
+
+  function pagesTotal() {
+    if (!core || !core.ext || typeof core.ext.pagesCount !== 'function') return 0;
+    return core.ext.pagesCount() || 0;
+  }
+
   function render() {
     if (!core) return;
     var st = core.ST;
@@ -268,7 +332,7 @@
     el.lcd.classList.toggle('err', !!st.err);
     el.mode.textContent = st.mode === 'PRG' ? 'ПРГ' : 'АВТ';
     el.layer.textContent = st.layer === 'f' ? 'F' : (st.layer === 'k' ? 'K' : '—');
-    el.step.textContent = pad2(st.ip);
+    el.step.textContent = addrText(st.ip);
 
     renderPanes();
     renderKeys();
@@ -391,10 +455,11 @@
 
   function renderStatus() {
     if (!el.status) return;
-    var MK = window.MKCore;
     el.status.innerHTML = '';
+    var page = pageText();
     var l = document.createElement('span');
-    l.innerHTML = 'шаг <b>' + stepCount + '</b> · PC <b>' + pad2(core.ST.ip) + '</b> / ' + MK.PROG_LEN;
+    l.innerHTML = 'шаг <b>' + stepCount + '</b> · PC <b>' + addrText(core.ST.ip) + '</b> / ' + core.PROG_LEN +
+      (page ? ' · ' + page : '');
     var r = document.createElement('span');
     r.textContent = autoTimer
       ? 'авто ' + tempoSec() + ' с'
@@ -404,22 +469,25 @@
   }
 
   /* ---------- листинг программы ---------- */
+
+  /* Подпись строки. Адрес перехода берётся у ядра (jumpAddr): оно одно
+     знает, что 100…104 записываются как «•» + цифра, и что за пределами
+     профиля адреса нет. Своя арифметика a*10+b здесь больше не живёт. */
   function rowText(code, i) {
-    var st = core.ST;
     var MK = window.MKCore;
     if (code === MK.NOP) return { label: '—', code: '', empty: true };
 
     if (MK.isJumpCmd(code)) {
-      var a = st.prog[(i + 1) % MK.PROG_LEN];
-      var b = st.prog[(i + 2) % MK.PROG_LEN];
-      var ad = (a <= 9 && b <= 9) ? (a * 10 + b) : -1;
+      var a = core.ST.prog[(i + 1) % core.PROG_LEN];
+      var b = core.ST.prog[(i + 2) % core.PROG_LEN];
+      var ad = (typeof core.jumpAddr === 'function') ? core.jumpAddr(i) : -1;
       return {
-        label: MK.cmdName(code) + (ad >= 0 ? ' → ' + pad2(ad) : ' → ??'),
+        label: core.cmdName(code) + (ad >= 0 ? ' → ' + addrText(ad) : ' → ??'),
         code: MK.codeStr(code) + ' ' + a + b,
         empty: false
       };
     }
-    return { label: MK.cmdName(code), code: MK.codeStr(code), empty: false };
+    return { label: core.cmdName(code), code: MK.codeStr(code), empty: false };
   }
 
   function renderProgram() {
@@ -429,7 +497,7 @@
     var last = core.lastStep();
 
     var end = Math.max(last + 1, st.ip + 1, 12);
-    if (end > MK.PROG_LEN) end = MK.PROG_LEN;
+    if (end > core.PROG_LEN) end = core.PROG_LEN;
 
     el.prog.innerHTML = '';
 
@@ -438,7 +506,12 @@
     var left = document.createElement('span');
     left.textContent = progMeta ? ('Программа · ' + progLabel()) : 'Программа';
     var right = document.createElement('span');
-    right.innerHTML = 'адрес <b>' + pad2(st.ip) + '</b> · занято <b>' + Math.max(last + 1, 0) + '</b> из ' + MK.PROG_LEN;
+    var used = Math.max(last + 1, 0);
+    var page = pageText();
+    var total = pagesTotal();
+    right.innerHTML = 'адрес <b>' + addrText(st.ip) + '</b> · занято <b>' + used + '</b> из ' + core.PROG_LEN +
+      (page ? ' · ' + page : '') +
+      (total ? ' <span class="pdim">(всего ' + (core.PROG_LEN * total) + ')</span>' : '');
     head.appendChild(left);
     head.appendChild(right);
     el.prog.appendChild(head);
@@ -454,7 +527,7 @@
 
       var a = document.createElement('span');
       a.className = 'paddr';
-      a.textContent = pad2(i);
+      a.textContent = addrText(i);
 
       var t = document.createElement('span');
       t.className = 'plabel';
@@ -471,7 +544,7 @@
       (function (addr, label, empty) {
         row.addEventListener('click', function () {
           core.ST.ip = addr;
-          setHint('Адрес ' + pad2(addr) + (empty ? ' — пустая ячейка' : ': ' + label));
+          setHint('Адрес ' + addrText(addr) + (empty ? ' — пустая ячейка' : ': ' + label));
           render();
         });
       })(i, info.label, info.empty);
@@ -513,7 +586,7 @@
   function journalAdd(before, label, result) {
     var st = core.ST;
     var diff = collectDiff(before);
-    if (st.ip !== before.ip) diff.push('→ ' + pad2(st.ip));
+    if (st.ip !== before.ip) diff.push('→ ' + addrText(st.ip));
     var note = '';
     if (result === 'stop') note = 'С/П';
     else if (result === 'error') note = 'ошибка';
@@ -552,7 +625,7 @@
 
       var a = document.createElement('span');
       a.className = 'laddr';
-      a.textContent = pad2(rec.addr);
+      a.textContent = addrText(rec.addr);
 
       var l = document.createElement('span');
       l.className = 'llab';
@@ -582,12 +655,13 @@
   function press(k) {
     var wasPrg = core.ST.mode === 'PRG';
     var isSp = (k.a === 'sp');
+    var oldMeta = progMeta;
     core.key(k);
 
     /* своя команда в ПРГ — значит программа больше не та, что загружена */
-    if (wasPrg && progMeta) {
+    if (wasPrg && oldMeta) {
       setProgMeta(null);
-      setHint('Программа изменена вручную — метка «' + progMeta.title + '» снята');
+      setHint('Программа изменена вручную — метка «' + oldMeta.title + '» снята');
     }
 
     /* С/П в автоматическом режиме запускает прогон программы */
@@ -625,18 +699,18 @@
     if (overflow) {
       setHint('Остановлено по лимиту шагов (' + RUN_LIMIT + ') — похоже на вечный цикл');
     } else if (err) {
-      setHint('Ошибка выполнения на шаге ' + steps + ' · адрес ' + pad2(core.ST.ip));
+      setHint('Ошибка выполнения на шаге ' + steps + ' · адрес ' + addrText(core.ST.ip));
     } else {
-      setHint('Программа' + name + ': остановка на адресе ' + pad2(core.ST.ip) + ' · шагов: ' + steps + ' · X = ' + core.fmt(core.ST.X));
+      setHint('Программа' + name + ': остановка на адресе ' + addrText(core.ST.ip) + ' · шагов: ' + steps + ' · X = ' + core.fmt(core.ST.X));
     }
     render();
   }
 
   function doStep() {
     var r = stepOnce();
-    if (r === 'stop') setHint('С/П на адресе ' + pad2(core.ST.ip));
-    else if (r === 'error') setHint('Ошибка выполнения на адресе ' + pad2(core.ST.ip));
-    else setHint('Шаг выполнен · адрес ' + pad2(core.ST.ip));
+    if (r === 'stop') setHint('С/П на адресе ' + addrText(core.ST.ip));
+    else if (r === 'error') setHint('Ошибка выполнения на адресе ' + addrText(core.ST.ip));
+    else setHint('Шаг выполнен · адрес ' + addrText(core.ST.ip));
     render();
   }
 
@@ -704,7 +778,7 @@
   function toggleAuto() {
     if (autoTimer) {
       stopAuto();
-      setHint('Авто остановлено на адресе ' + pad2(core.ST.ip));
+      setHint('Авто остановлено на адресе ' + addrText(core.ST.ip));
       render();
       return;
     }
@@ -725,8 +799,8 @@
       if (r === 'stop' || r === 'error') {
         stopAuto();
         setHint(r === 'stop'
-          ? 'Авто: С/П на адресе ' + pad2(core.ST.ip) + ' · X = ' + core.fmt(core.ST.X)
-          : 'Авто: ошибка на адресе ' + pad2(core.ST.ip));
+          ? 'Авто: С/П на адресе ' + addrText(core.ST.ip) + ' · X = ' + core.fmt(core.ST.X)
+          : 'Авто: ошибка на адресе ' + addrText(core.ST.ip));
         render();
       }
     }, sec * 1000);
