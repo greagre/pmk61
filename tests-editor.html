@@ -38,15 +38,15 @@
 <body>
 <h1>Редактор ассемблера: тесты</h1>
 <p class="sub">Чистая часть asm-editor.js без DOM: сборка текста в программу, объём программы,
-длина памяти и ошибки с номерами строк.</p>
+длина памяти, ошибки с номерами строк и узнавание примеров по тексту.</p>
 <div class="sum" id="sum">…</div>
 <div class="list" id="list"></div>
-<div class="foot">Профили, ассемблер и редактор подключены в том же порядке, что и в index.html.
+<div class="foot">Профили, ассемблер и редактор подключены в том же порядке и тех же версий, что и в index.html.
 Панель на этой странице не появляется: #prog здесь нет, и редактор молча ничего не вставляет.</div>
 
 <script src="profiles.js?v=14"></script>
-<script src="asm61.js?v=3"></script>
-<script src="asm-editor.js?v=1"></script>
+<script src="asm61.js?v=5"></script>
+<script src="asm-editor.js?v=7"></script>
 <script>
 (function () {
   'use strict';
@@ -222,6 +222,35 @@
     window.MKAsm = saved;
     eq(r.ok, false);
     ok(/ассемблер/i.test(r.errors[0]), 'текст про отсутствующий ассемблер');
+  });
+
+  /* ---------- узнавание примеров по тексту ----------
+     Список примеров следует за текстом поля: без этого на старте стоял
+     первый пункт, а в поле лежал текст прошлого сеанса, и «Ожидается»
+     показывало числа чужой программы. */
+
+  t('ПРИМЕР: текст факториала узнаётся', function () {
+    eq(E.matchExample(E.examples[0].src), 'fact');
+  });
+
+  t('ПРИМЕР: текст страницы 2 узнаётся', function () {
+    eq(E.matchExample(E.examples[6].src), 'page2');
+  });
+
+  t('ПРИМЕР: CRLF и хвостовые пробелы не мешают', function () {
+    var src = E.examples[1].src.split('\n').map(function (line) {
+      return line + '   ';
+    }).join('\r\n');
+    eq(E.matchExample(src), E.examples[1].id);
+  });
+
+  t('ПРИМЕР: свой текст не узнаётся', function () {
+    eq(E.matchExample('+\nС/П'), null);
+  });
+
+  t('ПРИМЕР: пустой текст — null', function () {
+    eq(E.matchExample(''), null);
+    eq(E.matchExample('   \n  '), null);
   });
 
   /* ---------- прогон ---------- */
