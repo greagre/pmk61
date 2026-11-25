@@ -155,8 +155,7 @@
      2. ext61.js → disasm61.js: расширение и декодер (ядро и листинг).
      3. profiles-ui.js: раскладки и список моделей, в т. ч. «МК-61 (расширенный)».
      4. ext61-boot.js: ПОСЛЕ раскладок и ДО ui.js — он смотрит выбранную
-        модель и отдаёт ui.js настоящее ядро (обёртка расширения живёт
-        отдельно, иначе интерфейс падает и клавиатура не строится).
+        модель, отдаёт ui.js настоящее ядро и перехватывает кнопку F0.
      5. ui.js → shelf.js → ext61-ui.js: интерфейс, библиотека, панель F0.
 
      Версии у файлов расширения поднимаются ВМЕСТЕ: если обновить один
@@ -168,7 +167,7 @@
 <script src="disasm61.js?v=7"></script>
 
 <script src="profiles-ui.js?v=2"></script>
-<script src="ext61-boot.js?v=7"></script>
+<script src="ext61-boot.js?v=8"></script>
 <script src="ui.js?v=1"></script>
 <script src="shelf.js?v=1"></script>
 <script src="ext61-ui.js?v=7"></script>
