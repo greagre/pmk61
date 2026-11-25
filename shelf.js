@@ -21,7 +21,7 @@
        version: 2,
        model: "mk-61",
        saved: "…",
-       programs: [ { name, prog: [...], data: {0:7}, layout: {n:0},
+       programs: [ { id, name, prog: [...], data: {0:7}, layout: {n:0},
                      inputs: ["n"], src: "…", asm: "…", savedAt } ]
      }
    Понимается и старый одиночный файл { prog, data, layout, src }.
@@ -56,6 +56,27 @@
    Старые записи без asm читаются как есть: перезагрузка такой записи
    поле редактора не трогает. Именно поэтому флаг has не вводился —
    отсутствие поля asm и есть честный признак «текста нет».
+
+   ПРАВКА v3 (26.11.2026) — МЕТКА ЗАПИСИ, СВЯЗКА КОДЫ↔ТЕКСТ
+
+   Было: парная запись искалась по имени. Имена совпадают случайно
+   и меняются при сохранении, поэтому нельзя было сказать наверняка,
+   к каким кодам относится текст.
+
+   Стало: у каждой записи есть id (строка вида p-<время>-<счётчик>).
+   Связка идёт по нему, имя остаётся подписью.
+
+   • newId() — метка при сохранении; ensureIds() проставляет метку
+     старым записям при чтении, не ломая формат: в файл она попадает
+     при следующей записи библиотеки;
+   • saveCurrent() — ставит id; если у записи с тем же id уже есть
+     текст asm, а новая программа пришла без него, старый текст
+     не затирается;
+   • importLib() — берёт id из файла, иначе выдаёт новый;
+   • renderShelf() — пара строк по id: сверху коды с кнопкой
+     «Загрузить», снизу «↳ тот же файл, asm» с кнопкой
+     «В редактор» — текст встаёт в поле, память не трогается;
+   • loadAsmOnly() — та самая кнопка «В редактор».
    ========================================================= */
 (function () {
   'use strict';
@@ -118,65 +139,63 @@
       prog: [0x61, 0x22, 0x20, 0x12, 0x50]
     },
     {
-      id: 'geron',
-      title: 'Формула Герона',
-      note: 'S = √(p(p−a)(p−b)(p−c)), p = (a+b+c)/2',
-      input: 'R1 = a, R2 = b, R3 = c',
-      check: '3, 4, 5 → 6',
-      expect: 6,
-      data: { 1: 3, 2: 4, 3: 5 },
-      /* 07 X→П 4 не трогает стек, поэтому p остаётся в Z и подхватывается
-         под первое умножение — поэтому листинг короче, чем кажется. */
-      prog: [0x61, 0x62, 0x10, 0x63, 0x10, 0x02, 0x13, 0x44,
-             0x64, 0x61, 0x11, 0x12, 0x64, 0x62, 0x11, 0x12,
-             0x64, 0x63, 0x11, 0x12, 0x21, 0x50]
-    },
-    {
-      id: 'nod4',
-      title: 'НОД четырёх чисел',
-      note: 'Евклид вычитанием, а не делением: шагов много — это нормально',
-      input: 'R1, R2, R3, R4 — целые числа',
-      check: '32, 124, 206, 1086 → 2',
-      expect: 2,
-      data: { 1: 32, 2: 124, 3: 206, 4: 1086 },
-      prog: [
-        0x53, 0x02, 0x00,
-        0x63, 0x42,
-        0x53, 0x02, 0x00,
-        0x64, 0x42,
-        0x53, 0x02, 0x00,
-        0x61, 0x50,
-        0x54, 0x54, 0x54, 0x54, 0x54,
-        0x61, 0x62, 0x11,
-        0x57, 0x04, 0x03,
-        0x59, 0x03, 0x06,
-        0x61, 0x62, 0x11, 0x41,
-        0x51, 0x02, 0x00,
-        0x62, 0x61, 0x11, 0x42,
-        0x51, 0x02, 0x00,
-        0x52
-      ]
+      id: 'hyp',
+      title: 'Гипотенуза',
+      note: 'c = √(a² + b²)',
+      input: 'R1 = a, R2 = b',
+      check: '3 и 4 → 5',
+      expect: 5,
+      data: { 1: 3, 2: 4 },
+      prog: [0x61, 0x12, 0x62, 0x12, 0x10, 0x21, 0x50]
     }
   ];
 
-  var builtinLast = {};  /* id → {ok, text} */
+  /* запомненные результаты проверки: ключ — 'b:fact' или 'm:<id>' */
+  var builtinLast = {};
+  var toastTimer = 0;
 
-  /* ---------- крупная индикация поверх экрана ---------- */
-  var toastTimer = null;
+  /* ---------- мелкие помощники ---------- */
+  function pool(n, msg) {
+    for (var i = 0; i < n; i++) {
+      if (!window.MKSHELF_USED) window.MKSHELF_USED = {};
+      var id = 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+      if (!window.MKSHELF_USED[id]) { window.MKSHELF_USED[id] = 1; return id; }
+    }
+    return 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
+  }
+
+  /* ---------- метка записи ---------- */
+  /* v3: id — постоянная метка программы. По ней связываются коды
+     и текст asm, поэтому имя может меняться, а пара остаётся. */
+  var idSeq = 0;
+  function newId() {
+    idSeq++;
+    return 'p-' + Date.now().toString(36) + '-' + idSeq.toString(36);
+  }
+
+  /* Старые записи без id получают его при чтении. В файл метка
+     попадёт при следующей записи библиотеки — формат не ломается. */
+  function ensureIds(arr) {
+    var changed = false;
+    arr.forEach(function (p) {
+      if (p && typeof p === 'object' && !p.id) {
+        p.id = newId();
+        changed = true;
+      }
+    });
+    if (changed) saveLib(arr);
+    return arr;
+  }
 
   function toast(text, kind, ms) {
-    var old = document.getElementById('mkToast');
+    var old = document.getElementById('mk-toast');
     if (old && old.parentNode) old.parentNode.removeChild(old);
 
-    var bg = '#1a7f47';
-    if (kind === 'bad') bg = '#c0392b';
-    else if (kind === 'warn') bg = '#a86a00';
-
     var d = document.createElement('div');
-    d.id = 'mkToast';
-    d.textContent = text;
+    d.id = 'mk-toast';
+    var bg = kind === 'bad' ? '#b23b3b' : (kind === 'warn' ? '#8a6d1f' : 'rgba(28,32,38,.94)');
     d.style.cssText =
-      'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:99999;' +
+      'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:9999;' +
       'max-width:92vw;padding:12px 16px;border-radius:12px;background:' + bg + ';color:#fff;' +
       'font:600 14px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
       'box-shadow:0 8px 24px rgba(0,0,0,.28);text-align:center;white-space:pre-line;pointer-events:none';
@@ -240,7 +259,7 @@
     try {
       var raw = localStorage.getItem(LIB_KEY);
       var arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr) ? arr : [];
+      return Array.isArray(arr) ? ensureIds(arr) : [];
     } catch (e) { return []; }
   }
 
@@ -262,6 +281,12 @@
       s++;
     }
     return name;
+  }
+
+  function byId(arr, id) {
+    if (!id) return null;
+    for (var i = 0; i < arr.length; i++) if (arr[i] && arr[i].id === id) return arr[i];
+    return null;
   }
 
   /* ---------- панель ---------- */
@@ -344,26 +369,37 @@
       if (p.savedAt) meta.push('сохранено ' + fmtWhen(p.savedAt));
       else if (p.saved) meta.push('файл от ' + fmtWhen(p.saved));
       if (p.src) meta.push('из МК-Алго');
-      if (p.asm) meta.push('с текстом asm');
       if (p.layout) {
         var keys = Object.keys(p.layout);
         if (keys.length) meta.push('переменные: ' + keys.join(', '));
       }
+      if (p.id) meta.push('метка ' + p.id);
 
-      ui.list.appendChild(row(n, p.name, p.check || '', p.input || '', {
+      var acts = {
         onLoad: function () { applyProgram(p.prog, p.data || {}, p.name, n, false, p.asm); },
-        onCheck: function () { checkProgram(p, 'm:' + p.name, n); },
+        onCheck: function () { checkProgram(p, 'm:' + p.id, n); },
         onDelete: function () {
-          var arr = loadLib().filter(function (x) { return x.name !== p.name; });
+          var arr = loadLib().filter(function (x) { return x.id !== p.id; });
           saveLib(arr);
           renderShelf();
         },
-        last: builtinLast['m:' + p.name]
-      }, true, meta.join(' · ')));
+        last: builtinLast['m:' + p.id]
+      };
+
+      /* v3: если у записи есть текст asm — под ней вторая строка,
+         связанная по тому же id. Кнопка «В редактор» кладёт текст
+         в поле и НЕ трогает память калькулятора. */
+      if (p.asm) acts.onEdit = function () { loadAsmOnly(p); };
+
+      ui.list.appendChild(row(n, p.name, p.check || '', p.input || '', acts, true, meta.join(' · '),
+        p.asm ? { text: 'тот же файл, asm', lines: p.asm.split(/\r?\n/).length } : null));
     });
   }
 
-  function row(num, title, check, input, acts, removable, meta) {
+  /* row(): строка списка. asmInfo необязателен — если передан,
+     под мета-строкой появляется вложенная строка «↳ тот же файл, asm»
+     с кнопкой «В редактор». */
+  function row(num, title, check, input, acts, removable, meta, asmInfo) {
     var d = el('div', 'srow');
 
     var n = el('div', 'snum', pad2(num));
@@ -406,6 +442,27 @@
     }
 
     body.appendChild(btns);
+
+    /* v3: вложенная строка с текстом ассемблера */
+    if (asmInfo && acts.onEdit) {
+      var subRow = el('div', 'sasm');
+      subRow.style.cssText = 'margin-top:8px;padding:7px 9px;border-radius:9px;' +
+        'background:rgba(127,127,127,.10);display:flex;gap:8px;align-items:center;flex-wrap:wrap;';
+
+      var tag = el('div', 'sasmtag', '↳ ' + asmInfo.text);
+      tag.style.cssText = 'flex:1 1 auto;font:600 12.5px/1.3 system-ui,-apple-system,' +
+        '"Segoe UI",Roboto,sans-serif;opacity:.85;';
+      subRow.appendChild(tag);
+
+      var bEdit = el('button', 'sb', 'В редактор');
+      bEdit.type = 'button';
+      bEdit.style.cssText = 'flex:0 0 auto;';
+      bEdit.addEventListener('click', function () { acts.onEdit(); });
+      subRow.appendChild(bEdit);
+
+      body.appendChild(subRow);
+    }
+
     d.appendChild(n);
     d.appendChild(body);
     return d;
@@ -451,6 +508,32 @@
       window.MKUI.hint('Загружено «' + title + '». Данные в регистрах, нажми Пуск.' + tail);
       toast('Загружено «' + title + '»\n' + prog.length + ' ячеек · ' + regsText(data) +
             (withAsm ? '\nс текстом asm' : ''));
+    }
+  }
+
+  /* v3: кнопка «В редактор» — только текст.
+     Память калькулятора не трогается вообще: ни loadProgram, ни
+     регистры. Дальше пользователь сам решает — править или собрать
+     уже имеющейся кнопкой «Собрать и загрузить». */
+  function loadAsmOnly(p) {
+    if (!p || typeof p.asm !== 'string' || !p.asm.trim()) {
+      toast('У этой записи нет текста ассемблера', 'warn');
+      return;
+    }
+    writeAsm(p.asm);
+    switchTab('code');
+    var ok = putAsmToField(p.asm);
+    closeShelf();
+
+    if (window.MKUI && window.MKUI.hint) {
+      window.MKUI.hint('Текст «' + p.name + '» в поле редактора. Память не тронута — ' +
+        'собери кнопкой «Собрать и загрузить».');
+    }
+    toast('Текст «' + p.name + '» в редакторе\n' + p.asm.split(/\r?\n/).length +
+          ' строк · память не тронута', 'ok', 6000);
+    if (!ok && window.MKUI && window.MKUI.hint) {
+      window.MKUI.hint('Панель редактора закрыта — текст сохранён и появится в поле, ' +
+        'когда откроешь вкладку «Код».');
     }
   }
 
@@ -537,7 +620,12 @@
       defName = freeName(arr, defName + (stampNow ? ' · ' + stampNow : ''));
     }
 
-    var name = window.prompt('Название программы', defName);
+    /* v3: если программа в памяти пришла из библиотеки, у неё уже есть
+       метка — предупреждаем, какую запись перезапишем. */
+    var cur = (window.MKUI.getProgMeta && window.MKUI.getProgMeta()) || null;
+    var curId = cur && cur.id ? cur.id : null;
+
+    var name = window.prompt('Название программы', (cur && cur.title) || defName);
     if (!name) return;
     name = String(name).trim() || 'Моя программа';
 
@@ -546,18 +634,32 @@
        нельзя. Пустое поле — поля asm в записи нет вовсе. */
     var asmText = readAsm();
 
-    var entry = { name: name, prog: prog, data: regs, savedAt: Date.now() };
+    var entry = { id: null, name: name, prog: prog, data: regs, savedAt: Date.now() };
     if (asmText.trim()) entry.asm = asmText;
 
+    /* v3: ищем запись по метке, если она известна; иначе по имени.
+       По метке надёжнее: имя могли поменять, а программа та же. */
     var idx = -1;
-    for (var k = 0; k < arr.length; k++) if (arr[k].name === name) idx = k;
+    if (curId) {
+      for (var a = 0; a < arr.length; a++) if (arr[a].id === curId) { idx = a; break; }
+    }
+    if (idx < 0) {
+      for (var k = 0; k < arr.length; k++) if (arr[k].name === name) { idx = k; break; }
+    }
 
     var note = '';
     if (idx < 0) {
+      entry.id = newId();
       arr.push(entry);
     } else if (sameProg(arr[idx].prog, entry.prog)) {
+      /* та же программа — обновляем запись, метку сохраняем;
+         старый текст asm не затираем пустым полем */
+      entry.id = arr[idx].id;
+      if (!entry.asm && arr[idx].asm) entry.asm = arr[idx].asm;
       arr[idx] = entry;
     } else {
+      /* программа другая — новая запись со своей меткой */
+      entry.id = newId();
       var alt = freeName(arr, name + ' · ' + fmtShort(entry.savedAt));
       entry.name = alt;
       arr.push(entry);
@@ -568,7 +670,7 @@
 
     var pos = arr.map(function (x) { return x.name; }).indexOf(name);
     var num = BUILTIN.length + pos + 1;
-    window.MKUI.setProgMeta({ num: num, title: name });
+    window.MKUI.setProgMeta({ num: num, title: name, id: entry.id });
 
     window.MKUI.hint('Сохранено «' + name + '» под номером ' + pad2(num) +
       ': ' + prog.length + ' ячеек, регистров ' + Object.keys(regs).length +
@@ -613,7 +715,7 @@
     var data = {
       app: 'pmk61',
       format: 'programs',
-      version: 2,
+      version: 3,
       model: 'mk-61',
       saved: new Date().toISOString(),
       programs: list
@@ -665,6 +767,7 @@
         var stamp = p.savedAt || (fileSaved ? Date.parse(fileSaved) : 0) || Date.now();
 
         var entry = {
+          id: (typeof p.id === 'string' && p.id) ? p.id : newId(),
           name: name,
           prog: p.prog.slice(),
           data: (p.data && typeof p.data === 'object') ? p.data : {},
@@ -678,16 +781,23 @@
            заново, и без этой строки поле asm молча терялось бы. */
         if (typeof p.asm === 'string' && p.asm.trim()) entry.asm = p.asm;
 
+        /* v3: ищем по метке, затем по имени */
         var idx = -1;
-        for (var k = 0; k < arr.length; k++) if (arr[k].name === name) { idx = k; break; }
+        var hit = byId(arr, entry.id);
+        if (hit) idx = arr.indexOf(hit);
+        if (idx < 0) {
+          for (var k = 0; k < arr.length; k++) if (arr[k].name === name) { idx = k; break; }
+        }
 
         if (idx < 0) {
           arr.push(entry);
           added++;
         } else if (JSON.stringify(arr[idx].prog) === JSON.stringify(entry.prog)) {
+          if (!entry.asm && arr[idx].asm) entry.asm = arr[idx].asm;
           arr[idx] = entry;
           replaced++;
         } else {
+          entry.id = newId();
           var alt = name + ' · ' + fmtShort(stamp);
           var base = alt, s = 2;
           while (arr.some(function (x) { return x.name === alt; })) {
@@ -767,15 +877,52 @@
     readAsm: readAsm,
     writeAsm: writeAsm,
     putAsmToField: function (t) { return putAsmToField(t); },
+    newId: newId,
+    loadAsmOnly: loadAsmOnly,
+    saveAsm: function (name, asm, prog, data, id) {
+      /* v3: запись только-текста (без кодов в памяти).
+         Кладёт в ту же библиотеку, коды необязательны. */
+      var arr = loadLib();
+      asm = String(asm == null ? '' : asm);
+      if (!asm.trim()) return null;
+
+      var entry = {
+        id: (typeof id === 'string' && id) ? id : newId(),
+        name: String(name || 'Программа').trim() || 'Программа',
+        prog: Array.isArray(prog) ? prog.slice() : [],
+        data: (data && typeof data === 'object') ? data : {},
+        asm: asm,
+        savedAt: Date.now()
+      };
+
+      var idx = -1;
+      var hit = byId(arr, entry.id);
+      if (hit) idx = arr.indexOf(hit);
+      if (idx < 0) {
+        for (var k = 0; k < arr.length; k++) if (arr[k].name === entry.name) { idx = k; break; }
+      }
+
+      if (idx < 0) arr.push(entry);
+      else {
+        entry.id = arr[idx].id;
+        if (!entry.prog.length && arr[idx].prog) entry.prog = arr[idx].prog;
+        arr[idx] = entry;
+      }
+      saveLib(arr);
+      if (window.MKSHELF_RENDER) window.MKSHELF_RENDER();
+      return entry;
+    },
     formatFile: function (list) {
       return {
         app: 'pmk61',
         format: 'programs',
-        version: 2,
+        version: 3,
         model: 'mk-61',
         saved: new Date().toISOString(),
         programs: list || loadLib()
       };
     }
   };
+
+  window.MKSHELF_RENDER = renderShelf;
 })();
