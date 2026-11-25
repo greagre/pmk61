@@ -151,18 +151,18 @@
 
 <!-- Расширение подключается ДО ui.js: он создаёт ядро синхронно,
      и ext61-boot.js должен успеть подменить фабрику.
-     Версии v=5 единые для всех файлов расширения: декодер обязан быть
-     свежим, иначе панель листинга пишет «декодер не подключён». -->
+     Версии v=6 единые для всех файлов расширения: если поднять один
+     файл и забыть другой, панель и декодер разойдутся. -->
 <script src="core.js?v=13"></script>
 <script src="profiles.js?v=13"></script>
-<script src="ext61.js?v=5"></script>
-<script src="disasm61.js?v=5"></script>
-<script src="ext61-boot.js?v=5"></script>
+<script src="ext61.js?v=6"></script>
+<script src="disasm61.js?v=6"></script>
+<script src="ext61-boot.js?v=6"></script>
 
 <script src="profiles-ui.js?v=1"></script>
 <script src="ui.js?v=1"></script>
 <script src="shelf.js?v=1"></script>
-<script src="ext61-ui.js?v=5"></script>
+<script src="ext61-ui.js?v=6"></script>
 
 <script>
 /* Переключатель угла Р-ГРД-Г — как в 34-й:
