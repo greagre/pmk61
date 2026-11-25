@@ -38,7 +38,7 @@
 <body>
 <h1>Редактор ассемблера: тесты</h1>
 <p class="sub">Чистая часть asm-editor.js без DOM: сборка текста в программу, объём программы,
-длина памяти, ошибки с номерами строк и узнавание примеров по тексту.</p>
+длина памяти и занятое в памяти ядра, ошибки с номерами строк и узнавание примеров по тексту.</p>
 <div class="sum" id="sum">…</div>
 <div class="list" id="list"></div>
 <div class="foot">Профили, ассемблер и редактор подключены в том же порядке и тех же версий, что и в index.html.
@@ -46,7 +46,7 @@
 
 <script src="profiles.js?v=14"></script>
 <script src="asm61.js?v=5"></script>
-<script src="asm-editor.js?v=8"></script>
+<script src="asm-editor.js?v=9"></script>
 <script>
 (function () {
   'use strict';
@@ -128,6 +128,20 @@
 
   t('ПАМЯТЬ: ноль страниц считается одной', function () {
     eq(E.memoryLength({ PROG_LEN: 105, ext: { pagesCount: function () { return 0; } } }), 105);
+  });
+
+  /* Занятое в памяти ядра: строка состояния говорит «в памяти N яч.»,
+     и это число считается по программе ядра, а не по тексту поля. */
+
+  t('ПАМЯТЬ: занятое считается по программе ядра', function () {
+    var prog = [];
+    for (var i = 0; i < 105; i++) prog.push(i < 3 ? 0x10 : NOP);
+    eq(E.memoryUsed({ PROG_LEN: 105, ST: { prog: prog } }), 3);
+  });
+
+  t('ПАМЯТЬ: без программы ядра — null', function () {
+    eq(E.memoryUsed(null), null);
+    eq(E.memoryUsed({ PROG_LEN: 105 }), null);
   });
 
   /* ---------- сборка ---------- */
