@@ -30,7 +30,7 @@
 <script src="core.js?v=14"></script>
 <script src="ext61.js?v=8"></script>
 <script src="disasm61.js?v=8"></script>
-<script src="asm61.js?v=1"></script>
+<script src="asm61.js?v=2"></script>
 <script>
 (function () {
   'use strict';
@@ -65,7 +65,8 @@
   });
 
   add('Сложение, С/П — два байта', function () {
-    eq(cells('+ С/П'), [0x10, 0x50]);
+    /* одна строка — одна команда, поэтому две строки */
+    eq(cells('+\nС/П'), [0x10, 0x50]);
   });
 
   add('Минус с символом U+2212 понимается как код 0x11', function () {
@@ -89,10 +90,19 @@
     eq(cells('K x\u2192П e'), [0xBE]);
   });
 
+  add('Кириллическая К равнозначна латинской: К X→П E — 0xBE', function () {
+    eq(cells('К X\u2192П E'), [0xBE]);
+  });
+
   add('Неверный регистр — ошибка', function () {
     var r = asm('x\u2192П 20');
     if (r.ok) fail('сборка не должна была пройти');
     if (!/регистр/i.test(r.errors[0].msg)) fail('не та ошибка: ' + r.errors[0].msg);
+  });
+
+  /* ---------- К-арифметика ---------- */
+  add('К −, К ×, К ÷ — коды 0x27, 0x28, 0x29', function () {
+    eq(cells('К \u2212\nК \u00D7\nК \u00F7'), [0x27, 0x28, 0x29]);
   });
 
   /* ---------- переходы ---------- */
@@ -166,6 +176,14 @@
     eq(cells('.3C'), [0x3C]);
   });
 
+  add('Байт 0x3D и обратно через декодер', function () {
+    var progCells = cells('.3D');
+    eq(progCells, [0x3D]);
+    var rows = MKDasm.rows(progCells);
+    eq(rows.length, 1);
+    eq(rows[0].code, '3D');
+  });
+
   /* ---------- круг: собрал → разобрал ---------- */
   add('Круг с декодером: строки совпадают по кодам', function () {
     var prog = [
@@ -203,6 +221,9 @@
       var nm = MKCore.cmdName(c);
       if (!nm || nm === '?') continue;
       if (MKCore.isJumpCmd(c)) continue;
+      /* пометка «(дубль)» — это пояснение декодера о неоднозначном коде,
+         а не команда языка программиста */
+      if (/\(дубль\)/i.test(nm)) continue;
       /* цифра F в младшей цифре означает тот же R0, в тексте её не пишут */
       if (c >= 0x40 && (c & 0x0F) === 0x0F) continue;
 
@@ -231,14 +252,22 @@
 
   /* ---------- загрузка в память ---------- */
   add('toProgram: длина 105, свободные шаги — NOP', function () {
-    var progCells = cells('+ С/П');
+    var progCells = cells('+\nС/П');
     var mem = MKAsm.toProgram(progCells, { len: 105, nop: 0x54 });
     eq(mem.length, 105);
     eq([mem[0], mem[1], mem[2], mem[104]], [0x10, 0x50, 0x54, 0x54]);
   });
 
+  add('toProgram: четыре страницы — 420 ячеек', function () {
+    var progCells = cells('+\nС/П');
+    var mem = MKAsm.toProgram(progCells, { len: 4 * 105, nop: 0x54 });
+    eq(mem.length, 420);
+    eq([mem[0], mem[1], mem[2], mem[104], mem[105], mem[419]],
+       [0x10, 0x50, 0x54, 0x54, 0x54, 0x54]);
+  });
+
   add('used считает занятые ячейки без NOP', function () {
-    var progCells = cells('+ С/П');
+    var progCells = cells('+\nС/П');
     var mem = MKAsm.toProgram(progCells, { len: 105, nop: 0x54 });
     eq(MKDasm.used(mem), 2);
   });
