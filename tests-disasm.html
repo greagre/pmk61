@@ -30,13 +30,13 @@
 <div id="out"></div>
 <div class="total" id="total">Идёт проверка…</div>
 <div class="note">Если что-то покраснело после правки — сначала проверь, что страница
-не из кэша: обнови адрес с другим числом в конце (<code>?v=4</code>, <code>?v=5</code>).
-Версия скриптов в этой сборке: core/profiles <code>v=15</code>, ext61/disasm61 <code>v=3</code>.</div>
+не из кэша: обнови адрес с другим числом в конце (<code>?v=7</code>, <code>?v=8</code>).
+Версия скриптов в этой сборке: core/profiles <code>v=15</code>, ext61/disasm61 <code>v=4</code>.</div>
 
 <script src="core.js?v=15"></script>
 <script src="profiles.js?v=15"></script>
-<script src="ext61.js?v=3"></script>
-<script src="disasm61.js?v=3"></script>
+<script src="ext61.js?v=4"></script>
+<script src="disasm61.js?v=4"></script>
 <script>
 (function () {
   'use strict';
@@ -62,6 +62,11 @@
     out.appendChild(d);
   }
 
+  function firstText(prog) {
+    var rr = window.MKDasm && window.MKDasm.rows(prog);
+    return (rr && rr[0]) ? rr[0].text : '';
+  }
+
   var D = window.MKDasm;
 
   /* ---------- 1. свежесть ---------- */
@@ -84,6 +89,15 @@
        window.MKExt61.extName(0x4F) === 'x→П 0 в банк-адресат'),
     window.MKExt61 ? 'extName(4F)="' + window.MKExt61.extName(0x4F) + '"' : 'MKExt61 нет');
 
+  /* средние цифры: проверка, что номер не теряется на всём диапазоне */
+  check('extName: байт 43 — это R3 (не только 0 и F)',
+    !!(window.MKExt61 && window.MKExt61.extName(0x43) === 'x→П 3 в банк-адресат'),
+    window.MKExt61 ? 'extName(43)="' + window.MKExt61.extName(0x43) + '"' : 'MKExt61 нет');
+
+  check('extName: байт 6E — это R14 (буква e)',
+    !!(window.MKExt61 && window.MKExt61.extName(0x6E) === 'П→x e из банка-адресата'),
+    window.MKExt61 ? 'extName(6E)="' + window.MKExt61.extName(0x6E) + '"' : 'MKExt61 нет');
+
   /* ---------- 2. одна двухбайтная команда F0 ---------- */
   var r = D.rows([0xF0, 0x21, 0x50]);
   check('F0 21 — одна строка на две ячейки',
@@ -97,25 +111,20 @@
     r[0].code === 'F0 21', 'code="' + r[0].code + '"');
 
   /* ---------- 3. межбанковые ---------- */
-  var r40 = D.rows([0xF0, 0x40]);
   check('F0 40 — x→П 0 в банк-адресат',
-    r40[0].text === 'x→П 0 в банк-адресат', 'text="' + r40[0].text + '"');
+    firstText([0xF0, 0x40]) === 'x→П 0 в банк-адресат', 'text="' + firstText([0xF0, 0x40]) + '"');
 
-  var r60 = D.rows([0xF0, 0x60]);
   check('F0 60 — П→x 0 из банка-адресата',
-    r60[0].text === 'П→x 0 из банка-адресата', 'text="' + r60[0].text + '"');
+    firstText([0xF0, 0x60]) === 'П→x 0 из банка-адресата', 'text="' + firstText([0xF0, 0x60]) + '"');
 
-  var r4f = D.rows([0xF0, 0x4F]);
   check('F0 4F — это R0 (как в таблице кодов)',
-    r4f[0].text === 'x→П 0 в банк-адресат', 'text="' + r4f[0].text + '"');
+    firstText([0xF0, 0x4F]) === 'x→П 0 в банк-адресат', 'text="' + firstText([0xF0, 0x4F]) + '"');
 
-  var r6f = D.rows([0xF0, 0x6F]);
   check('F0 6F — тоже R0',
-    r6f[0].text === 'П→x 0 из банка-адресата', 'text="' + r6f[0].text + '"');
+    firstText([0xF0, 0x6F]) === 'П→x 0 из банка-адресата', 'text="' + firstText([0xF0, 0x6F]) + '"');
 
-  var r05 = D.rows([0xF0, 0x05]);
   check('F0 05 — банк-адресат ← X',
-    r05[0].text === 'банк-адресат ← X', 'text="' + r05[0].text + '"');
+    firstText([0xF0, 0x05]) === 'банк-адресат ← X', 'text="' + firstText([0xF0, 0x05]) + '"');
 
   /* ---------- 4. мусор второго байта ---------- */
   var r30 = D.rows([0xF0, 0x30]);
