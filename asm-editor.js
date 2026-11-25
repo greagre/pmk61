@@ -70,6 +70,18 @@
    занимает две ячейки (02 и 03). Значит ответ 4, а Y = 0 — это адрес
    самой F0 10 на 00. Прогон дал именно X = 4, Y = 0, то есть эмулятор
    был прав, а строка «ожидается» врала.
+
+   ПРАВКА v5 (25.11.2026)
+
+   Примеры страниц. Ассемблер v5 понимает «.page N», и стало можно
+   проверить главное, что до сих пор не проверялось: что код, собранный
+   на страницу 1, реально оттуда исполняется. Прежние пять примеров
+   оставлены как есть — набор только дополняется, чтобы в конце прогнать
+   всё подряд и не потерять уже закрытые случаи.
+
+   Панель теперь передаёт ассемблеру размер страницы и их число от ядра,
+   а не свои числа: у обычной МК-61 страница одна, у ext61 — четыре,
+   и расходиться этим значениям нельзя.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -114,27 +126,47 @@
     return len * pages;
   }
 
+  /* Размер одной страницы и их число — тоже от ядра, а не свои. */
+  function pageInfo(core) {
+    var size = (core && core.PROG_LEN > 0) ? core.PROG_LEN : DEFAULT_LEN;
+    var len = memoryLength(core);
+    var pages = Math.max(1, Math.round(len / size));
+    return { size: size, pages: pages, len: len };
+  }
+
   /* Есть ли у текущего ядра расширение: по нему выбираются примеры с F0. */
   function hasExt(core) {
     return !!(core && core.ext);
   }
 
   /* Текст → программа, готовая для core.setProgram.
-     Возвращает {ok, errors, cells, program, count, used, labels}.
+     Возвращает {ok, errors, cells, program, count, used, labels, pages}.
      При ошибке program пустой: загружать его нельзя — адреса в cells
      съехали, потому что длина неверной строки неизвестна. */
   function buildProgram(text, opts) {
     var o = opts || {};
     var asm = global.MKAsm;
-    var len = (o.len > 0) ? Math.round(o.len) : DEFAULT_LEN;
-    var fail = { ok: false, errors: [], cells: [], program: [], count: 0, used: 0, labels: {} };
+    var info = pageInfo(o.core);
+    var len = (o.len > 0) ? Math.round(o.len) : info.len;
+    var pageSize = (o.pageSize > 0) ? Math.round(o.pageSize) : info.size;
+    var pages = (o.pages > 0) ? Math.round(o.pages) : Math.max(1, Math.round(len / pageSize));
+
+    var fail = {
+      ok: false, errors: [], cells: [], program: [],
+      count: 0, used: 0, labels: {}, pages: pages, pageSize: pageSize
+    };
 
     if (!asm || typeof asm.assemble !== 'function') {
       fail.errors = ['Ассемблер asm61.js не подключён'];
       return fail;
     }
 
-    var r = asm.assemble(text, { model: o.model, maxCells: len });
+    var r = asm.assemble(text, {
+      model: o.model,
+      maxCells: len,
+      pageSize: pageSize,
+      pages: pages
+    });
     if (!r.ok) {
       fail.errors = errorLines(r.errors);
       fail.cells = r.cells || [];
@@ -151,7 +183,9 @@
       program: program,
       count: r.count,
       used: trimTrailingNop(program),
-      labels: r.labels || {}
+      labels: r.labels || {},
+      pages: pages,
+      pageSize: pageSize
     };
   }
 
@@ -161,7 +195,10 @@
      F L0 и стек сразу, без всякого расширения. Остальные — по одной
      возможности ext61, чтобы сбой сразу показывал, что именно не так.
      Комментарии ассемблер вырезает, поэтому строка «ожидается» в тексте
-     ни на сборку, ни на адреса не влияет. */
+     ни на сборку, ни на адреса не влияет.
+
+     Набор только дополняется: пять нижних примеров уже проверены живыми
+     прогонами, их не трогаем — чтобы в конце прогнать всё подряд. */
   var EXAMPLES = [
     {
       id: 'fact',
@@ -252,6 +289,43 @@
         'F0 60',
         'С/П'
       ].join('\n')
+    },
+    {
+      id: 'page1',
+      name: 'Страница 1 — код оттуда исполняется',
+      expect: 'X = 33',
+      ext: true,
+      src: [
+        '; страница 0: 11 в R0, затем F0 21 — переход на страницу 1',
+        '; страница 1: 33 в R0 и останов',
+        '; если F0 21 не переключит страницу, исполнится С/П на 04',
+        '; и в X останется 11 — поэтому ответ 33 однозначен',
+        '; ожидается X = 33 (и R0 = 33)',
+        '11',
+        'X→П 0',
+        'F0 21',
+        'С/П',
+        '.page 1',
+        '33',
+        'X→П 0',
+        'С/П'
+      ].join('\n')
+    },
+    {
+      id: 'page2',
+      name: 'Страница 2 — номер страницы в X',
+      expect: 'X = 2',
+      ext: true,
+      src: [
+        '; F0 22 уводит исполнение на страницу 2, где стоит только F0 24',
+        '; F0 24 читает номер ТЕКУЩЕЙ страницы: должно выйти 2, не 0',
+        '; ожидается X = 2',
+        'F0 22',
+        'С/П',
+        '.page 2',
+        'F0 24',
+        'С/П'
+      ].join('\n')
     }
   ];
 
@@ -336,7 +410,8 @@
       var labels = Object.keys(res.labels).length;
       stat.className = 'asm-stat ok';
       stat.textContent = 'Собрано ' + res.count + ' яч. · занято ' + res.used +
-        ' из ' + res.program.length + (labels ? ' · меток ' + labels : '');
+        ' из ' + res.program.length + (labels ? ' · меток ' + labels : '') +
+        (res.pages > 1 ? ' · страниц ' + res.pages : '');
       return;
     }
 
@@ -364,14 +439,22 @@
   function compile(andLoad) {
     if (!area) return null;
     var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
-    var res = buildProgram(area.value, { len: memoryLength(core) });
+    var info = pageInfo(core);
+    var res = buildProgram(area.value, {
+      len: info.len,
+      pageSize: info.size,
+      pages: info.pages
+    });
     renderResult(res);
     saveText();
 
     if (res.ok && andLoad && global.MKUI && typeof global.MKUI.loadProgram === 'function') {
       global.MKUI.loadProgram(res.program, null, { title: 'Из текста' });
       if (typeof global.MKUI.hint === 'function') {
-        global.MKUI.hint('Собрано ' + res.count + ' яч. · программа в памяти, адрес 00. Жми «Пуск».');
+        var where = (res.count > res.pageSize && res.pages > 1)
+          ? 'страниц задействовано ' + Math.ceil(res.count / res.pageSize)
+          : 'адрес 00';
+        global.MKUI.hint('Собрано ' + res.count + ' яч. · программа в памяти, ' + where + '. Жми «Пуск».');
       }
     }
     return res;
@@ -460,7 +543,8 @@
     panel.appendChild(out);
 
     panel.appendChild(mk('div', 'asm-tip',
-      'Одна строка — одна команда (число из цифр можно писать слитно: 42). Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #'));
+      'Одна строка — одна команда (число из цифр можно писать слитно: 42). ' +
+      'Страница: .page 1. Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #'));
 
     host.parentNode.insertBefore(panel, host);
     loadText();
@@ -482,6 +566,7 @@
     buildProgram: buildProgram,
     trimTrailingNop: trimTrailingNop,
     memoryLength: memoryLength,
+    pageInfo: pageInfo,
     errorLines: errorLines,
     hasExt: hasExt,
     mount: mount,
