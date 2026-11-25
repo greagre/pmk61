@@ -82,6 +82,22 @@
    Панель теперь передаёт ассемблеру размер страницы и их число от ядра,
    а не свои числа: у обычной МК-61 страница одна, у ext61 — четыре,
    и расходиться этим значениям нельзя.
+
+   ПРАВКА v6 (25.11.2026) — как считать «занято» при нескольких страницах
+
+   Прогон примера «Страница 1» показал «занято 109 из 420», хотя в двух
+   страницах лежало 6 и 4 ячейки. Причина: trimTrailingNop считался по
+   всему массиву, а между страницами лежит хвост НОП первой страницы —
+   он и попадал в счёт.
+
+   Теперь «занято» считается постранично, а страницы задействованные
+   считаются отдельно: до последней страницы, где есть хоть одна
+   непустая ячейка. При одной странице оба числа совпадают с прежними,
+   поэтому уже закрытые примеры и тесты не меняются.
+
+   Сама загрузка в память осталась прежней: панель отдаёт 420 ячеек
+   в MKUI.loadProgram, а ext61 v10 сам режет их по страницам. Знать
+   про страницы редактору не нужно — это забота расширения.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -100,6 +116,34 @@
     var n = Array.isArray(prog) ? prog.length : 0;
     while (n > 0 && ((prog[n - 1] & 0xFF) === empty)) n--;
     return n;
+  }
+
+  /* Сколько ячеек занято во всём массиве, если считать постранично.
+     Одним trimTrailingNop по всему массиву считать нельзя: хвост НОП
+     первой страницы попадёт в счёт, и выйдет «занято 109» там, где
+     реально лежит 10 ячеек. */
+  function usedPerPages(prog, pageSize) {
+    var size = (pageSize > 0) ? Math.round(pageSize) : DEFAULT_LEN;
+    if (!Array.isArray(prog)) return 0;
+    var total = 0;
+    for (var i = 0; i < prog.length; i += size) {
+      total += trimTrailingNop(prog.slice(i, i + size));
+    }
+    return total;
+  }
+
+  /* Сколько страниц реально задействовано: номер последней непустой
+     плюс один. Нужно для строки «страниц задействовано N». */
+  function pagesUsed(prog, pageSize) {
+    var size = (pageSize > 0) ? Math.round(pageSize) : DEFAULT_LEN;
+    if (!Array.isArray(prog) || !prog.length) return 1;
+    var last = 0;
+    for (var i = 0; i < prog.length; i += size) {
+      if (trimTrailingNop(prog.slice(i, i + size)) > 0) {
+        last = Math.floor(i / size);
+      }
+    }
+    return last + 1;
   }
 
   /* Ошибки из asm61 → строки для человека. Номер строки впереди,
@@ -153,7 +197,7 @@
 
     var fail = {
       ok: false, errors: [], cells: [], program: [],
-      count: 0, used: 0, labels: {}, pages: pages, pageSize: pageSize
+      count: 0, used: 0, pagesUsed: 0, labels: {}, pages: pages, pageSize: pageSize
     };
 
     if (!asm || typeof asm.assemble !== 'function') {
@@ -182,7 +226,8 @@
       cells: r.cells,
       program: program,
       count: r.count,
-      used: trimTrailingNop(program),
+      used: usedPerPages(program, pageSize),
+      pagesUsed: pagesUsed(program, pageSize),
       labels: r.labels || {},
       pages: pages,
       pageSize: pageSize
@@ -409,9 +454,9 @@
     if (res.ok) {
       var labels = Object.keys(res.labels).length;
       stat.className = 'asm-stat ok';
-      stat.textContent = 'Собрано ' + res.count + ' яч. · занято ' + res.used +
-        ' из ' + res.program.length + (labels ? ' · меток ' + labels : '') +
-        (res.pages > 1 ? ' · страниц ' + res.pages : '');
+      stat.textContent = 'Занято ' + res.used + ' из ' + res.program.length +
+        (res.pagesUsed > 1 ? ' · страниц ' + res.pagesUsed : '') +
+        (labels ? ' · меток ' + labels : '');
       return;
     }
 
@@ -449,12 +494,13 @@
     saveText();
 
     if (res.ok && andLoad && global.MKUI && typeof global.MKUI.loadProgram === 'function') {
+      /* Отдаём все 420 ячеек: ext61 сам режет их по страницам (v10). */
       global.MKUI.loadProgram(res.program, null, { title: 'Из текста' });
       if (typeof global.MKUI.hint === 'function') {
-        var where = (res.count > res.pageSize && res.pages > 1)
-          ? 'страниц задействовано ' + Math.ceil(res.count / res.pageSize)
+        var where = (res.pagesUsed > 1)
+          ? 'страниц задействовано ' + res.pagesUsed
           : 'адрес 00';
-        global.MKUI.hint('Собрано ' + res.count + ' яч. · программа в памяти, ' + where + '. Жми «Пуск».');
+        global.MKUI.hint('Занято ' + res.used + ' яч. · программа в памяти, ' + where + '. Жми «Пуск».');
       }
     }
     return res;
@@ -565,6 +611,8 @@
   global.MKAsmEditor = {
     buildProgram: buildProgram,
     trimTrailingNop: trimTrailingNop,
+    usedPerPages: usedPerPages,
+    pagesUsed: pagesUsed,
     memoryLength: memoryLength,
     pageInfo: pageInfo,
     errorLines: errorLines,
