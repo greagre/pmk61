@@ -1,7 +1,7 @@
 /* =========================================================
    pmk61 / ext61.js
-   Расширение линии МК-61: двухбайтные команды с префиксом 0xF0
-   и банки регистров.
+   Расширение линии МК-61: двухбайтные команды с префиксом 0xF0,
+   банки регистров и межбанковый доступ.
 
    ГЛАВНОЕ ПРАВИЛО ЭТОГО ФАЙЛА
    core.js НЕ правится. Модуль создаёт обычный экземпляр ядра
@@ -17,11 +17,22 @@
    Второй байт:
      00…03   выбрать банк регистров 0…3
      04      номер текущего банка → X
+     05      банк-адресат ← X        (стек не меняется)
+     06      банк-адресат → X
      10      адрес этой команды → X        («K СЧ»)
      11      адрес следующей ячейки → X
      20…23   резерв: страницы программы (пока ЕГГ0Г)
-     40…4E   резерв: x→П в другой банк (пока ЕГГ0Г)
-     60…6E   резерв: П→x из другого банка (пока ЕГГ0Г)
+     40…4F   x→П в банк-адресат: RGn адресата ← X        (F = R0)
+     60…6F   П→x из банка-адресата: X ← RGn адресата      (F = R0)
+
+   ЗАЧЕМ БАНК-АДРЕСАТ
+
+   Переключение банка — глобальное состояние, и забыть вернуть
+   его назад очень легко. Команды 40…/60… позволяют взять или
+   положить значение в другой банк, НЕ меняя текущий, поэтому
+   программа не может «потерять» банк между операциями.
+   Банк-адресат — отдельная маленькая переменная, её видно
+   командой 06 и она сбрасывается полным сбросом.
 
    БАНКИ
 
@@ -44,25 +55,42 @@
   var BANKS = 4;
   var DEF_REGS = 15;
 
+  /* младшая цифра F означает R0 — как в таблице кодов МК-61 */
+  var REG_F = 15;
+
   var NAMES = {
     0x00: 'банк 0',
     0x01: 'банк 1',
     0x02: 'банк 2',
     0x03: 'банк 3',
     0x04: 'банк → X',
+    0x05: 'банк-адресат ← X',
+    0x06: 'банк-адресат → X',
     0x10: 'адрес → X',
     0x11: 'следующий адрес → X'
   };
 
+  var REG_CHARS = '0123456789abcde';
+
   /* ---------- вспомогательное ---------- */
 
+  function regChar(lo) {
+    return (lo === REG_F) ? '0' : REG_CHARS.charAt(lo & 0x0F);
+  }
+
   function describe(second) {
-    var n = NAMES[second & 0xFF];
-    return n ? n : 'неизвестная EXT-команда';
+    var s = second & 0xFF;
+    if (NAMES[s]) return NAMES[s];
+    if (s >= 0x40 && s <= 0x4F) return 'x→П ' + regChar(s) + ' в банк-адресат';
+    if (s >= 0x60 && s <= 0x6F) return 'П→x ' + regChar(s) + ' из банка-адресата';
+    if (s >= 0x20 && s <= 0x23) return 'резерв: страница ' + (s & 0x03);
+    return 'неизвестная EXT-команда';
   }
 
   function isExt(second) {
-    return Object.prototype.hasOwnProperty.call(NAMES, second & 0xFF);
+    var s = second & 0xFF;
+    if (Object.prototype.hasOwnProperty.call(NAMES, s)) return true;
+    return (s >= 0x40 && s <= 0x4F) || (s >= 0x60 && s <= 0x6F);
   }
 
   /* ---------- фабрика ---------- */
@@ -99,6 +127,8 @@
        работали с регистрами без единой переделки */
     banks[0] = core.ST.R;
     var cur = 0;
+    /* банк, к которому обращаются команды 40…/60… без переключения */
+    var target = 0;
 
     /* ---------- банки ---------- */
 
@@ -112,6 +142,20 @@
     }
 
     function bank() { return cur; }
+    function targetBank() { return target; }
+
+    function bankArr(n) {
+      return (n === cur) ? core.ST.R : banks[n];
+    }
+
+    /* номер регистра из младшей цифры второго байта;
+       F (15) означает R0, всё за пределами профиля — ошибка */
+    function regOf(second) {
+      var lo = second & 0x0F;
+      var r = (lo === REG_F) ? 0 : lo;
+      if (r < 0 || r >= core.REG_COUNT) return -1;
+      return r;
+    }
 
     /* ---------- стек ---------- */
 
@@ -130,6 +174,33 @@
       return true;
     }
 
+    /* ---------- межбанковый доступ ---------- */
+
+    /* банк-адресат задаётся числом в X: целое 0…3, иначе ЕГГ0Г.
+       X при этом не меняется — иначе команда портила бы вычисление. */
+    function setTarget() {
+      var v = core.ST.X;
+      if (typeof v !== 'number' || isNaN(v) || !isFinite(v)) return false;
+      var n = Math.round(v);
+      if (Math.abs(v - n) > 1e-9) return false;
+      if (n < 0 || n >= BANKS) return false;
+      target = n;
+      return true;
+    }
+
+    function storeToTarget(second) {
+      var r = regOf(second);
+      if (r < 0) return false;
+      bankArr(target)[r] = core.ST.X;
+      return true;
+    }
+
+    function loadFromTarget(second) {
+      var r = regOf(second);
+      if (r < 0) return false;
+      return push(bankArr(target)[r]);
+    }
+
     /* ---------- выполнение расширения ---------- */
 
     function handle(second, at) {
@@ -138,13 +209,20 @@
           return select(second);
         case 0x04:
           return push(cur);
+        case 0x05:
+          return setTarget();
+        case 0x06:
+          return push(target);
         case 0x10:
           return push(at);
         case 0x11:
           return push((at + 2) % progLen);
         default:
-          return false;   /* резерв и мусор — ЕГГ0Г, как у ПМК */
+          break;
       }
+      if (second >= 0x40 && second <= 0x4F) return storeToTarget(second);
+      if (second >= 0x60 && second <= 0x6F) return loadFromTarget(second);
+      return false;   /* резерв и мусор — ЕГГ0Г, как у ПМК */
     }
 
     var baseStep = core.step;
@@ -205,6 +283,7 @@
         for (var k = 0; k < BANKS; k++) {
           if (k !== cur) banks[k] = zeroBank();
         }
+        target = 0;
       }
       return r;
     };
@@ -229,6 +308,8 @@
       bank: bank,
       selectBank: select,
       banksCount: function () { return BANKS; },
+      targetBank: targetBank,
+      setTargetBank: function (n) { return setTarget.call(null, n); },
       step: stepExt,
       run: runExt,
       writeExt: writeExt,
