@@ -113,12 +113,12 @@
     check('F0 99 → ЕГГ0Г', r.result === 'error' && m.core.ST.err === true, 'result=' + r.result);
   })();
 
-  /* ---------- 8. резервный второй байт тоже ЕГГ0Г ---------- */
+  /* ---------- 8. неописанный второй байт тоже ЕГГ0Г ---------- */
   (function () {
     var m = fresh();
-    m.core.setProgram([0xF0, 0x20, 0x50]);
+    m.core.setProgram([0xF0, 0x30, 0x50]);
     var r = m.run(10);
-    check('резерв F0 20 → ЕГГ0Г', r.result === 'error', 'result=' + r.result);
+    check('F0 30 → ЕГГ0Г', r.result === 'error', 'result=' + r.result);
   })();
 
   /* ---------- 9. полный сброс чистит банки ---------- */
@@ -155,9 +155,11 @@
     var n = MKExt61.extName(0x01);
     var u = MKExt61.extName(0x77);
     var st = MKExt61.extName(0x40);
+    var pg = MKExt61.extName(0x22);
     check('описание EXT-команд',
-          n === 'банк 1' && u === 'неизвестная EXT-команда' && st.indexOf('x→П') === 0,
-          n + ' / ' + u);
+          n === 'банк 1' && u === 'неизвестная EXT-команда' &&
+          st.indexOf('x→П') === 0 && pg === 'страница 2',
+          n + ' / ' + u + ' / ' + pg);
   })();
 
   /* ---------- 13. F0 40: запись в другой банк без переключения ---------- */
@@ -292,6 +294,69 @@
     ]);
     var r = m.run(100);
     check('П→x 0 после двух записей даёт 5', r.x === 5, 'X=' + r.x);
+  })();
+
+  /* ---------- 22. F0 21 переключает на страницу и начинает её с нуля ---------- */
+  (function () {
+    var m = fresh();
+    m.selectPage(1);
+    m.core.setProgram([0x07, 0x0E, 0x08, 0x10, 0x50]);   /* 7 В↑ 8 + С/П = 15 */
+    m.selectPage(0);
+    m.core.setProgram([0xF0, 0x21, 0x50]);                /* переход на страницу 1 */
+    var r = m.run(100);
+    check('F0 21 исполняет программу страницы 1',
+          r.x === 15 && m.page() === 1,
+          'X=' + r.x + ', страница=' + m.page());
+  })();
+
+  /* ---------- 23. F0 24 отдаёт номер страницы ---------- */
+  (function () {
+    var m = fresh();
+    m.selectPage(3);
+    m.core.setProgram([0xF0, 0x24, 0x50]);                /* страница → X */
+    m.selectPage(0);
+    m.core.setProgram([0xF0, 0x23, 0x50]);                /* переход на страницу 3 */
+    var r = m.run(100);
+    check('F0 24 отдаёт номер страницы',
+          r.x === 3 && m.page() === 3,
+          'X=' + r.x + ', страница=' + m.page());
+  })();
+
+  /* ---------- 24. страницы не смешиваются ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x01, 0x50]);            /* страница 0: 1 С/П */
+    m.selectPage(1);
+    m.core.setProgram([0x02, 0x50]);            /* страница 1: 2 С/П */
+    m.selectPage(0);
+    var r = m.run(50);
+    check('страницы не смешиваются', r.x === 1, 'X=' + r.x + ', страница=' + m.page());
+  })();
+
+  /* ---------- 25. полный сброс чистит страницы ---------- */
+  (function () {
+    var m = fresh();
+    m.selectPage(2);
+    m.core.setProgram([0x09, 0x50]);
+    var before = m.core.ST.prog[0];
+    m.core.reset(false);
+    check('сброс чистит страницы',
+          before === 0x09 && m.core.ST.prog[0] !== 0x09 && m.page() === 2,
+          'до=' + before + ', после=' + m.core.ST.prog[0] + ', страница=' + m.page());
+  })();
+
+  /* ---------- 26. writeExt пишет в текущую страницу ---------- */
+  (function () {
+    var m = fresh();
+    m.selectPage(1);
+    m.core.ST.ip = 0;
+    var ok = m.writeExt(0x02);
+    var inPage1 = (m.core.ST.prog[0] === 0xF0 && m.core.ST.prog[1] === 0x02);
+    m.selectPage(0);
+    var page0Free = (m.core.ST.prog[0] !== 0xF0);
+    check('writeExt пишет в текущую страницу',
+          ok && inPage1 && page0Free,
+          'страница1=' + (inPage1 ? 'F0 02' : 'нет') + ', страница0=' + (page0Free ? 'чиста' : 'тронута'));
   })();
 
   var sum = document.createElement('div');
