@@ -20,18 +20,22 @@
            font-size: 15px; font-weight: 600; }
   .total.bad { background: #fff0f0; color: #b32d2d; }
   .total.ok { background: #eefaf2; color: #1d7a44; }
+  .note { color: #6b7480; font-size: 12px; margin-top: 14px; line-height: 1.5; }
 </style>
 </head>
 <body>
 <h1>Декодер листинга · pmk61</h1>
-<div class="sub">Проверка disasm61.js. Двухбайтные команды F0 не должны разрываться и сдвигать адреса.</div>
+<div class="sub">Проверка disasm61.js. Команды не должны разрываться и сдвигать адреса:
+две ячейки у <b>F0</b>, три у переходов, одна у остальных.</div>
 <div id="out"></div>
 <div class="total" id="total">Идёт проверка…</div>
+<div class="note">Если что-то покраснело после правки — сначала проверь, что страница
+не из кэша: обнови адрес с другим числом в конце (<code>?v=2</code>, <code>?v=3</code>).</div>
 
-<script src="core.js?v=13"></script>
-<script src="profiles.js?v=13"></script>
-<script src="ext61.js?v=1"></script>
-<script src="disasm61.js?v=1"></script>
+<script src="core.js?v=14"></script>
+<script src="profiles.js?v=14"></script>
+<script src="ext61.js?v=2"></script>
+<script src="disasm61.js?v=2"></script>
 <script>
 (function () {
   'use strict';
@@ -57,26 +61,25 @@
     out.appendChild(d);
   }
 
-  function mk(arr) {
-    var p = new Array(105).fill(0);
-    for (var i = 0; i < arr.length; i++) p[i] = arr[i];
-    return p;
-  }
+  var D = window.MKDasm;
 
   /* ---------- 1. свежесть ---------- */
   check('disasm61.js загружен',
-    !!(window.MKDasm && typeof window.MKDasm.rows === 'function'),
-    window.MKDasm ? 'MKDasm.rows есть' : 'MKDasm нет — обнови страницу');
+    !!(D && typeof D.rows === 'function'),
+    D ? 'MKDasm.rows есть' : 'MKDasm нет — обнови страницу');
 
-  var D = window.MKDasm;
   if (!D) {
     total.textContent = 'Декодер не загрузился';
     total.className = 'total bad';
     return;
   }
 
-  /* ---------- 2. одна двухбайтная команда ---------- */
-  var r = D.rows(mk([0xF0, 0x21, 0x50]), { length: 3 });
+  check('ядро знает isJumpCmd — правило трёх ячеек доступно',
+    !!(window.MKCore && typeof window.MKCore.isJumpCmd === 'function'),
+    window.MKCore ? 'MKCore.isJumpCmd есть' : 'нет — работает запасной список');
+
+  /* ---------- 2. одна двухбайтная команда F0 ---------- */
+  var r = D.rows([0xF0, 0x21, 0x50]);
   check('F0 21 — одна строка на две ячейки',
     r.length === 2 && r[0].len === 2 && r[0].kind === 'ext',
     'строк=' + r.length + ', длина первой=' + (r[0] && r[0].len));
@@ -88,70 +91,104 @@
     r[0].code === 'F0 21', 'code="' + r[0].code + '"');
 
   /* ---------- 3. межбанковые ---------- */
-  var r40 = D.rows(mk([0xF0, 0x40]), { length: 2 });
+  var r40 = D.rows([0xF0, 0x40]);
   check('F0 40 — x→П 0 в банк-адресат',
-    r40[0].text.indexOf('x→П') === 0, 'text="' + r40[0].text + '"');
+    r40[0].text === 'x→П 0 в банк-адресат', 'text="' + r40[0].text + '"');
 
-  var r60 = D.rows(mk([0xF0, 0x60]), { length: 2 });
+  var r60 = D.rows([0xF0, 0x60]);
   check('F0 60 — П→x 0 из банка-адресата',
-    r60[0].text.indexOf('П→x') === 0, 'text="' + r60[0].text + '"');
+    r60[0].text === 'П→x 0 из банка-адресата', 'text="' + r60[0].text + '"');
 
-  var r4f = D.rows(mk([0xF0, 0x4F]), { length: 2 });
+  var r4f = D.rows([0xF0, 0x4F]);
   check('F0 4F — это R0 (как в таблице кодов)',
     r4f[0].text === 'x→П 0 в банк-адресат', 'text="' + r4f[0].text + '"');
 
-  var r05 = D.rows(mk([0xF0, 0x05]), { length: 2 });
+  var r6f = D.rows([0xF0, 0x6F]);
+  check('F0 6F — тоже R0',
+    r6f[0].text === 'П→x 0 из банка-адресата', 'text="' + r6f[0].text + '"');
+
+  var r05 = D.rows([0xF0, 0x05]);
   check('F0 05 — банк-адресат ← X',
     r05[0].text === 'банк-адресат ← X', 'text="' + r05[0].text + '"');
 
   /* ---------- 4. мусор второго байта ---------- */
-  var r30 = D.rows(mk([0xF0, 0x30]), { length: 2 });
+  var r30 = D.rows([0xF0, 0x30]);
   check('F0 30 — неизвестная EXT-команда, но строка одна',
     r30.length === 1 && r30[0].len === 2 && r30[0].text === 'неизвестная EXT-команда',
     'строк=' + r30.length + ', text="' + r30[0].text + '"');
 
   /* ---------- 5. обычные команды ---------- */
-  var r50 = D.rows(mk([0x50]), { length: 1 });
+  var r50 = D.rows([0x50]);
   check('0x50 — обычная однобайтная команда',
     r50[0].len === 1 && r50[0].kind === 'cmd', 'len=' + r50[0].len);
 
-  var r7 = D.rows(mk([0x07, 0x41]), { length: 2 });
-  check('две обычные команды — две строки',
-    r7.length === 2 && r7[1].addr === 1, 'строк=' + r7.length);
+  var rz = D.rows([0x00]);
+  check('0x00 — это цифра 0, а не пустой шаг',
+    rz.length === 1 && rz[0].kind === 'cmd' && rz[0].text === '0',
+    'kind=' + rz[0].kind + ', text="' + rz[0].text + '"');
+
+  var rnop = D.rows([0x54]);
+  check('0x54 — пустой шаг (NOP профиля)',
+    rnop.length === 1 && rnop[0].kind === 'nop' && rnop[0].empty === true,
+    'kind=' + rnop[0].kind);
 
   /* ---------- 6. смешанная программа ---------- */
-  var mix = mk([0x05, 0x40, 0xF0, 0x02, 0x09, 0x40, 0x50]);
-  var rm = D.rows(mix, { length: 7 });
+  var mix = [0x05, 0x40, 0xF0, 0x02, 0x09, 0x40, 0x50];
+  var rm = D.rows(mix);
   var addrs = rm.map(function (x) { return x.addr; }).join(',');
   check('смесь F0 и обычных — без разрывов',
     addrs === '0,1,2,4,5,6', 'адреса=' + addrs);
 
-  /* ---------- 7. сумма длин ---------- */
   var sum = rm.reduce(function (a, x) { return a + x.len; }, 0);
   check('сумма длин равна длине участка',
     sum === 7, 'сумма=' + sum + ', участок=7');
 
+  /* ---------- 7. переходы: три ячейки ---------- */
+  var rj = D.rows([0x5D, 0x00, 0x02, 0x50]);
+  check('F L0 02 — переход занимает три ячейки',
+    rj.length === 2 && rj[0].len === 3 && rj[0].kind === 'jump',
+    'строк=' + rj.length + ', длина первой=' + (rj[0] && rj[0].len));
+  check('F L0 02 — адрес перехода в подписи',
+    rj[0].text === 'F L0 → 02', 'text="' + rj[0].text + '"');
+  check('F L0 02 — следующая строка с адреса 03',
+    rj[1].addr === 3, 'addr=' + rj[1].addr);
+
+  var rbp = D.rows([0x51, 0x00, 0x05]);
+  check('БП 05 — подпись с адресом',
+    rbp[0].text === 'БП → 05' && rbp[0].len === 3, 'text="' + rbp[0].text + '"');
+
+  var rhigh = D.rows([0x51, 0x0A, 0x02]);
+  check('БП -2 — адрес выше 99 пишется через дефис',
+    rhigh[0].text === 'БП → -2', 'text="' + rhigh[0].text + '"');
+
   /* ---------- 8. F0 в последней ячейке ---------- */
-  var tail = new Array(4).fill(0);
-  tail[3] = 0xF0;
-  var rt = D.rows(tail, { length: 4 });
+  var tail = [0x21, 0x54, 0x54, 0xF0];
+  var rt = D.rows(tail);
+  var last = rt[rt.length - 1];
   check('F0 в последней ячейке — второй байт по кругу',
-    rt[0].kind === 'ext' && rt[0].code === 'F0 00',
-    'code="' + rt[0].code + '"');
+    last.kind === 'ext' && last.code === 'F0 21',
+    'code="' + last.code + '", строк=' + rt.length);
 
   /* ---------- 9. used ---------- */
-  check('used считает занятые ячейки, а не всю память',
-    D.used(mk([0x05, 0x40]), { length: 105 }) === 2,
-    'used=' + D.used(mk([0x05, 0x40]), { length: 105 }));
+  check('used: две команды — две ячейки',
+    D.used([0x05, 0x40]) === 2, 'used=' + D.used([0x05, 0x40]));
 
   check('used учитывает двухбайтную команду как две ячейки',
-    D.used(mk([0xF0, 0x21]), { length: 105 }) === 2,
-    'used=' + D.used(mk([0xF0, 0x21]), { length: 105 }));
+    D.used([0xF0, 0x21]) === 2, 'used=' + D.used([0xF0, 0x21]));
+
+  check('used не считает хвост из NOP',
+    D.used([0x05, 0x40, 0x54, 0x54]) === 2,
+    'used=' + D.used([0x05, 0x40, 0x54, 0x54]));
+
+  check('used учитывает переход как три ячейки',
+    D.used([0x5D, 0x00, 0x02]) === 3, 'used=' + D.used([0x5D, 0x00, 0x02]));
 
   /* ---------- 10. пустая программа ---------- */
   check('пустая программа — пустой листинг',
-    D.rows(mk([]), { length: 105 }).length === 0,
-    'строк=' + D.rows(mk([]), { length: 105 }).length);
+    D.rows([]).length === 0, 'строк=' + D.rows([]).length);
+
+  check('память из одних NOP — пустой листинг при used=0',
+    D.used([0x54, 0x54, 0x54]) === 0, 'used=' + D.used([0x54, 0x54, 0x54]));
 
   /* ---------- итог ---------- */
   total.textContent = 'Итог: ' + pass + ' прошло, ' + fail + ' провалилось';
