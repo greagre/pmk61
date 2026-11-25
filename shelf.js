@@ -18,7 +18,7 @@
      {
        app: "pmk61",
        format: "programs",
-       version: 2,
+       version: 3,
        model: "mk-61",
        saved: "…",
        programs: [ { id, name, prog: [...], data: {0:7}, layout: {n:0},
@@ -77,6 +77,25 @@
      «Загрузить», снизу «↳ тот же файл, asm» с кнопкой
      «В редактор» — текст встаёт в поле, память не трогается;
    • loadAsmOnly() — та самая кнопка «В редактор».
+
+   ПРАВКА v4 (26.11.2026) — ОТМЕТКИ И СОХРАНЕНИЕ ВЫБРАННЫХ В JSON
+
+   Нужно было сохранять не то, что лежит в памяти калькулятора, а любые
+   программы из списка — одну или десять сразу, одним файлом.
+
+   • у каждой записи «Мои» появился чекбокс; у встроенных примеров его
+     нет намеренно: их выгружать незачем, они есть в самой странице;
+   • отмеченные id лежат в наборе checked и переживают перерисовку
+     списка (проверка программы, удаление соседней строки и т. п.);
+   • внизу панели — строка «Отмечено: N» и кнопка «Сохранить отмеченные
+     в JSON». Ноль отмеченных — кнопка неактивна; никаких вопросов
+     «может, сохранить все?» нет и не будет;
+   • экспорт берёт ровно отмеченные записи целиком: prog, data, layout,
+     inputs, src, asm, savedAt, id. Никакой фильтрации по типу
+     программы: запись без текста asm выгружается так же, как запись
+     с текстом;
+   • импорт не изменился: каждая программа из файла встаёт в список
+     отдельной строкой, по одной на запись, ничего не склеивается.
    ========================================================= */
 (function () {
   'use strict';
@@ -153,6 +172,27 @@
   /* запомненные результаты проверки: ключ — 'b:fact' или 'm:<id>' */
   var builtinLast = {};
   var toastTimer = 0;
+
+  /* v4: отмеченные записи. Храним id, а не индексы: список
+     перерисовывается после каждой проверки и удаления, индексы
+     поехали бы, а метки остаются верными. */
+  var checked = {};
+  var checkedCount = 0;
+
+  function keyOf(id) { return 'k:' + String(id); }
+  function isChecked(id) { return !!(id && checked[keyOf(id)]); }
+
+  function setChecked(id, on) {
+    if (!id) return;
+    var k = keyOf(id);
+    if (on && !checked[k]) { checked[k] = 1; checkedCount++; }
+    else if (!on && checked[k]) { delete checked[k]; checkedCount--; }
+  }
+
+  function clearChecked() {
+    checked = {};
+    checkedCount = 0;
+  }
 
   /* ---------- мелкие помощники ---------- */
   function pool(n, msg) {
@@ -340,6 +380,14 @@
     var mine = loadLib();
     ui.list.innerHTML = '';
 
+    /* Отметки могли указывать на уже удалённые записи — подчищаем,
+       чтобы счётчик не врал. */
+    Object.keys(checked).forEach(function (k) {
+      var id = k.slice(2);
+      if (!byId(mine, id)) { delete checked[k]; checkedCount--; }
+    });
+    if (checkedCount < 0) checkedCount = 0;
+
     var num = 0;
 
     ui.list.appendChild(el('div', 'shelf-cat', 'Встроенные · ' + BUILTIN.length));
@@ -379,9 +427,11 @@
         onLoad: function () { applyProgram(p.prog, p.data || {}, p.name, n, false, p.asm); },
         onCheck: function () { checkProgram(p, 'm:' + p.id, n); },
         onDelete: function () {
+          setChecked(p.id, false);
           var arr = loadLib().filter(function (x) { return x.id !== p.id; });
           saveLib(arr);
           renderShelf();
+          paintCheckedBar();
         },
         last: builtinLast['m:' + p.id]
       };
@@ -392,18 +442,84 @@
       if (p.asm) acts.onEdit = function () { loadAsmOnly(p); };
 
       ui.list.appendChild(row(n, p.name, p.check || '', p.input || '', acts, true, meta.join(' · '),
-        p.asm ? { text: 'тот же файл, asm', lines: p.asm.split(/\r?\n/).length } : null));
+        p.asm ? { text: 'тот же файл, asm', lines: p.asm.split(/\r?\n/).length } : null,
+        p.id));
     });
+
+    ui.list.appendChild(checkedBar());
+    paintCheckedBar();
+  }
+
+  /* ---------- v4: панель отмеченных ---------- */
+  function checkedBar() {
+    var bar = el('div', 'schecked');
+    bar.id = 'shelfCheckedBar';
+    bar.style.cssText = 'position:sticky;bottom:0;margin-top:12px;padding:10px 4px 4px;' +
+      'display:flex;gap:10px;align-items:center;flex-wrap:wrap;' +
+      'background:inherit;border-top:1px solid rgba(127,127,127,.25);';
+
+    var label = el('div', 'schecked-count', 'Отмечено: 0');
+    label.id = 'shelfCheckedCount';
+    label.style.cssText = 'flex:1 1 auto;font:600 13px/1.3 system-ui,-apple-system,' +
+      '"Segoe UI",Roboto,sans-serif;opacity:.85;';
+    bar.appendChild(label);
+
+    var b = el('button', 'sb', 'Сохранить отмеченные в JSON');
+    b.id = 'shelfExportChecked';
+    b.type = 'button';
+    b.disabled = true;
+    b.style.cssText = 'flex:0 0 auto;';
+    b.addEventListener('click', exportChecked);
+    bar.appendChild(b);
+
+    return bar;
+  }
+
+  /* Правило простое: ничего не отмечено — кнопка серая и не нажимается.
+     Никаких «может, всё-таки сохранить всё?». */
+  function paintCheckedBar() {
+    var label = document.getElementById('shelfCheckedCount');
+    var btn = document.getElementById('shelfExportChecked');
+    var n = checkedCount;
+    if (n < 0) n = 0;
+    if (label) label.textContent = 'Отмечено: ' + n;
+    if (btn) {
+      btn.disabled = (n === 0);
+      btn.style.opacity = (n === 0) ? '.45' : '1';
+      btn.style.cursor = (n === 0) ? 'default' : 'pointer';
+    }
+  }
+
+  /* Чекбокс строки «Мои». У встроенных не вызывается. */
+  function checkbox(id) {
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'scheck';
+    box.style.cssText = 'flex:0 0 auto;width:20px;height:20px;margin:0 2px 0 0;' +
+      'accent-color:#3a7bd5;cursor:pointer;';
+    box.checked = isChecked(id);
+    box.addEventListener('click', function (e) { e.stopPropagation(); });
+    box.addEventListener('change', function () {
+      setChecked(id, box.checked);
+      paintCheckedBar();
+    });
+    return box;
   }
 
   /* row(): строка списка. asmInfo необязателен — если передан,
      под мета-строкой появляется вложенная строка «↳ тот же файл, asm»
-     с кнопкой «В редактор». */
-  function row(num, title, check, input, acts, removable, meta, asmInfo) {
+     с кнопкой «В редактор». recordId необязателен: если передан,
+     слева появляется чекбокс (v4). */
+  function row(num, title, check, input, acts, removable, meta, asmInfo, recordId) {
     var d = el('div', 'srow');
+    d.style.cssText = 'display:flex;gap:9px;align-items:flex-start;';
+
+    if (recordId) d.appendChild(checkbox(recordId));
 
     var n = el('div', 'snum', pad2(num));
+    n.style.cssText = 'flex:0 0 auto;';
     var body = el('div', 'sbody');
+    body.style.cssText = 'flex:1 1 auto;min-width:0;';
     body.appendChild(el('div', 'stitle', title));
     var sub = [];
     if (check) sub.push(check);
@@ -706,12 +822,31 @@
     });
   }
 
-  function exportLib() {
-    var list = loadLib();
-    if (!list.length) {
-      toast('В библиотеке нет твоих программ — нечего выгружать', 'warn');
-      return;
-    }
+  /* Запись целиком, без фильтров по типу: prog, data и прочее кладутся
+     как есть. Поле asm попадает в файл только если оно есть. */
+  function fullRecord(p) {
+    var r = {
+      id: p.id,
+      name: p.name,
+      prog: Array.isArray(p.prog) ? p.prog.slice() : [],
+      data: (p.data && typeof p.data === 'object') ? p.data : {},
+      savedAt: p.savedAt || Date.now()
+    };
+    if (p.layout) r.layout = p.layout;
+    if (p.inputs) r.inputs = p.inputs;
+    if (p.src) r.src = p.src;
+    if (p.saved) r.saved = p.saved;
+    if (typeof p.asm === 'string' && p.asm.trim()) r.asm = p.asm;
+    return r;
+  }
+
+  function fileNameNow() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return 'mk61-programs-' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '.json';
+  }
+
+  function saveJson(list, fileName) {
     var data = {
       app: 'pmk61',
       format: 'programs',
@@ -724,14 +859,39 @@
     var blob = new Blob([text], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'mk61-programs.json';
+    a.download = fileName || fileNameNow();
     document.body.appendChild(a);
     a.click();
     setTimeout(function () {
       URL.revokeObjectURL(a.href);
       a.remove();
     }, 1000);
-    toast('Выгружено программ: ' + list.length + '\nmk61-programs.json');
+    return data;
+  }
+
+  /* v4: сохранение отмеченных. Список берём из библиотеки в её порядке,
+     а не в порядке нажатия галочек — так в файле программы идут так же,
+     как в панели. */
+  function exportChecked() {
+    if (!checkedCount) return;   /* кнопка и так неактивна, но пусть будет */
+
+    var arr = loadLib();
+    var picked = arr.filter(function (p) { return p && isChecked(p.id); });
+    if (!picked.length) {
+      toast('Ничего не отмечено — сохранять нечего', 'warn');
+      paintCheckedBar();
+      return;
+    }
+
+    saveJson(picked.map(fullRecord), fileNameNow());
+
+    var withAsm = picked.filter(function (p) {
+      return typeof p.asm === 'string' && p.asm.trim();
+    }).length;
+
+    toast('Сохранено программ: ' + picked.length + '\n' +
+          'из них с текстом asm: ' + withAsm + '\n' +
+          fileNameNow(), 'ok', 8000);
   }
 
   function importLib(file) {
@@ -820,12 +980,14 @@
 
       var regLine = regsText(first.data);
       var when = fmtWhen(first.savedAt || fileSaved);
-      var libLine = 'список: +' + added + (replaced ? ' · обновлено ' + replaced : '');
+      var libLine = 'список: +' + added + (replaced ? ' · обновлено ' + replaced : '') +
+                    ' · всего ' + arr.length;
 
       var msg = 'Загружено в корпус: «' + first.name + '»\n' +
                 first.prog.length + ' ячеек · ' + regLine + '\n' +
                 (when ? 'файл от ' + when : 'дата в файле не указана') + '\n' +
                 libLine;
+      if (incoming.length > 1) msg += '\nв списке появилось строк: ' + incoming.length;
       if (first.asm) msg += '\nс текстом asm';
       if (renamed.length) msg += '\nсохранено как: ' + renamed.join(', ');
 
@@ -843,7 +1005,11 @@
     if (ui.open) ui.open.addEventListener('click', openShelf);
     if (ui.close) ui.close.addEventListener('click', closeShelf);
     if (ui.save) ui.save.addEventListener('click', saveCurrent);
-    if (ui.exp) ui.exp.addEventListener('click', exportLib);
+
+    /* Старая кнопка «Сохранить в JSON» в шапке панели делает то же,
+       что и новая внизу: сохраняет отмеченные. Так нет двух разных
+       путей с разным смыслом. */
+    if (ui.exp) ui.exp.addEventListener('click', exportChecked);
     if (ui.imp) ui.imp.addEventListener('click', function () { if (ui.file) ui.file.click(); });
     if (ui.file) {
       ui.file.addEventListener('change', function () {
@@ -879,6 +1045,16 @@
     putAsmToField: function (t) { return putAsmToField(t); },
     newId: newId,
     loadAsmOnly: loadAsmOnly,
+    /* v4: отметки */
+    isChecked: isChecked,
+    setChecked: setChecked,
+    clearChecked: function () { clearChecked(); paintCheckedBar(); },
+    checkedIds: function () {
+      return loadLib().filter(function (p) { return p && isChecked(p.id); })
+                      .map(function (p) { return p.id; });
+    },
+    exportChecked: exportChecked,
+    exportSelected: exportChecked,
     saveAsm: function (name, asm, prog, data, id) {
       /* v3: запись только-текста (без кодов в памяти).
          Кладёт в ту же библиотеку, коды необязательны. */
