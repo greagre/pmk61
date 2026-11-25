@@ -31,7 +31,7 @@
 <p class="sub">Проверка на настоящем ядре: переключение банков, межбанковый доступ, страницы программы и ввод двухбайтной команды с клавиатуры.</p>
 <div class="sum" id="sum">Идёт проверка…</div>
 <ol id="list"></ol>
-<a class="back" href="index.html?v=60">← к эмулятору</a>
+<a class="back" href="index.html?v=61&amp;model=mk-61-ext">← к эмулятору, модель «МК-61 (расширенный)»</a>
 
 <!-- Модель, которую видит ext61-boot.js при создании ядра.
      В тестах она всегда расширенная, кроме одной специальной проверки. -->
@@ -41,7 +41,7 @@
 </select>
 
 <script src="core.js?v=13"></script>
-<script src="ext61.js?v=8"></script>
+<script src="ext61.js?v=9"></script>
 <script src="ext61-boot.js?v=9"></script>
 <script>
 (function () {
@@ -91,22 +91,23 @@
     return window.MKCore.create({ onEvent: function () {} });
   }
 
+  /* ВАЖНО: core.setProgram() не только кладёт программу, но и создаёт
+     НОВЫЙ массив ST.R — регистры при этом обнуляются (если не передан
+     keepRegisters). Поэтому в тестах банков программа пишется напрямую
+     в ST.prog, иначе значения регистров стираются ещё до проверки. */
+  function progSet(core, arr) {
+    for (var i = 0; i < core.PROG_LEN; i++) core.ST.prog[i] = core.NOP;
+    for (var j = 0; j < arr.length; j++) core.ST.prog[j] = arr[j] & 0xFF;
+    core.ST.ip = 0;
+    core.ST.err = false;
+  }
+
   function setProg(core, arr) {
-    var a = new Array(core.PROG_LEN).fill(0);
+    var a = new Array(core.PROG_LEN).fill(core.NOP);
     for (var i = 0; i < arr.length; i++) a[i] = arr[i] & 0xFF;
     core.setProgram(a);
     core.ST.ip = 0;
     return a;
-  }
-
-  function exec(core, arr) {
-    setProg(core, arr);
-    var res = 'cont', guard = 0;
-    while (guard++ < 200) {
-      res = core.step();
-      if (res === 'stop' || res === 'error') break;
-    }
-    return res;
   }
 
   function forcePrg(core) {
@@ -150,61 +151,83 @@
 
   check('F0 01 выбирает банк 1', function () {
     var c = makeCore();
-    exec(c, [0xF0, 0x01, 0x50]);
+    progSet(c, [0xF0, 0x01, 0x50]);
+    c.step();
     return eq(c.ext.bank(), 1);
   });
 
   check('F0 04 отдаёт номер банка в X', function () {
     var c = makeCore();
-    exec(c, [0xF0, 0x02, 0xF0, 0x04, 0x50]);
+    progSet(c, [0xF0, 0x02]);
+    c.step();
+    progSet(c, [0xF0, 0x04, 0x50]);
+    c.step();
     return eq(c.ST.X, 2);
   });
 
   check('банк 0 не меняется от записи в банк 1', function () {
     var c = makeCore();
-    c.ST.R[1] = 111;
-    exec(c, [0xF0, 0x01, 0x50]);
+    c.ext.selectBank(1);
     c.ST.R[1] = 222;
-    exec(c, [0xF0, 0x00, 0x50]);
+    c.ext.selectBank(0);
+    c.ST.R[1] = 111;
+    c.ext.selectBank(1);
+    if (c.ST.R[1] !== 222) return 'в банке 1 ожидалось 222, получено ' + c.ST.R[1];
+    c.ext.selectBank(0);
     return eq(c.ST.R[1], 111);
   });
 
   check('банк 1 не видит регистры банка 0', function () {
     var c = makeCore();
     c.ST.R[3] = 77;
-    exec(c, [0xF0, 0x01, 0x50]);
+    c.ext.selectBank(1);
     return eq(c.ST.R[3], 0);
+  });
+
+  check('setProgram не отвязывает текущий банк', function () {
+    var c = makeCore();
+    c.ext.selectBank(2);
+    c.setProgram([]);
+    c.ST.R[0] = 33;
+    if (c.ext.bank() !== 2) return 'банк сбился: ' + c.ext.bank();
+    c.ext.selectBank(0);
+    c.ext.selectBank(2);
+    return eq(c.ST.R[0], 33);
   });
 
   /* ---------- 3. банк-адресат ---------- */
 
   check('F0 05 берёт банк-адресат из X', function () {
     var c = makeCore();
+    progSet(c, [0xF0, 0x05, 0x50]);
     c.ST.X = 2;
-    exec(c, [0xF0, 0x05, 0x50]);
+    c.step();
     return eq(c.ext.targetBank(), 2);
   });
 
   check('F0 06 кладёт банк-адресат в X', function () {
     var c = makeCore();
     c.ext.setTargetBank(3);
-    exec(c, [0xF0, 0x06, 0x50]);
+    progSet(c, [0xF0, 0x06, 0x50]);
+    c.step();
     return eq(c.ST.X, 3);
   });
 
   check('F0 05 не принимает номер банка 9', function () {
     var c = makeCore();
+    progSet(c, [0xF0, 0x05, 0x50]);
     c.ST.X = 9;
-    var res = exec(c, [0xF0, 0x05, 0x50]);
+    var res = c.step();
     if (res !== 'error') return 'команда не дала ЕГГОГ, результат ' + res;
     return eq(c.ST.err, true);
   });
 
   check('F0 40 пишет в банк-адресат, текущий банк не меняя', function () {
     var c = makeCore();
+    progSet(c, [0xF0, 0x40, 0x50]);
     c.ext.setTargetBank(1);
     c.ST.X = 7;
-    exec(c, [0xF0, 0x40, 0x50]);
+    c.step();
     if (c.ext.bank() !== 0) return 'текущий банк стал ' + c.ext.bank();
     c.ext.selectBank(1);
     return eq(c.ST.R[0], 7);
@@ -212,17 +235,19 @@
 
   check('F0 60 читает из банка-адресата', function () {
     var c = makeCore();
+    progSet(c, [0xF0, 0x62, 0x50]);
     c.ext.setTargetBank(0);
     c.ST.R[2] = 42;
-    exec(c, [0xF0, 0x62, 0x50]);
+    c.step();
     return eq(c.ST.X, 42);
   });
 
   check('F0 4F пишет в R0 — младшая цифра F значит R0', function () {
     var c = makeCore();
+    progSet(c, [0xF0, 0x4F, 0x50]);
     c.ext.setTargetBank(0);
     c.ST.X = 9;
-    exec(c, [0xF0, 0x4F, 0x50]);
+    c.step();
     return eq(c.ST.R[0], 9);
   });
 
@@ -230,9 +255,9 @@
 
   check('сброс гасит соседние банки и оставляет текущий', function () {
     var c = makeCore();
-    exec(c, [0xF0, 0x01, 0x50]);
+    c.ext.selectBank(1);
     c.ST.R[0] = 55;
-    exec(c, [0xF0, 0x00, 0x50]);
+    c.ext.selectBank(0);
     c.reset(false);
     if (c.ext.bank() !== 0) return 'банк после сброса ' + c.ext.bank();
     if (c.ext.targetBank() !== 0) return 'банк-адресат не сброшен: ' + c.ext.targetBank();
@@ -242,7 +267,7 @@
 
   check('сброс не стирает программу', function () {
     var c = makeCore();
-    setProg(c, [0x51, 0x52]);
+    progSet(c, [0x51, 0x52]);
     c.reset(false);
     return eq(c.ST.prog[0], 0x51);
   });
@@ -251,7 +276,7 @@
 
   check('F0 21 уводит на страницу 1 и ставит адрес 00', function () {
     var c = makeCore();
-    setProg(c, [0xF0, 0x21]);
+    progSet(c, [0xF0, 0x21]);
     c.step();
     if (c.ext.page() !== 1) return 'страница ' + c.ext.page();
     return eq(c.ST.ip, 0);
@@ -259,32 +284,39 @@
 
   check('повторный F0 21 на той же странице не зацикливает', function () {
     var c = makeCore();
-    setProg(c, [0xF0, 0x21]);
+    progSet(c, [0xF0, 0x21]);
     c.step();
-    setProg(c, [0xF0, 0x21]);
+    progSet(c, [0xF0, 0x21]);
     c.step();
     return eq(c.ST.ip, 2);
   });
 
   check('F0 24 отдаёт номер страницы в X', function () {
     var c = makeCore();
-    setProg(c, [0xF0, 0x22]);
+    progSet(c, [0xF0, 0x22]);
     c.step();
-    setProg(c, [0xF0, 0x24]);
+    progSet(c, [0xF0, 0x24]);
     c.step();
     return eq(c.ST.X, 2);
   });
 
   check('страницы хранят программы раздельно', function () {
     var c = makeCore();
-    setProg(c, [0x51, 0x52]);
-    setProg(c, [0xF0, 0x21]);
+    progSet(c, [0xF0, 0x21]);        /* страница 0: переход на страницу 1 */
     c.step();
-    setProg(c, [0x53]);
-    setProg(c, [0xF0, 0x20]);
+    if (c.ext.page() !== 1) return 'не ушли на страницу 1: ' + c.ext.page();
+
+    progSet(c, [0x53, 0xF0, 0x20]);  /* страница 1: 53 и возврат на страницу 0 */
+    c.ST.ip = 1;
     c.step();
-    if (c.ext.page() !== 0) return 'вернулись не на страницу 0: ' + c.ext.page();
-    return eq(c.ST.prog[0], 0x51);
+    if (c.ext.page() !== 0) return 'не вернулись на страницу 0: ' + c.ext.page();
+    if (c.ST.prog[0] !== 0xF0 || c.ST.prog[1] !== 0x21) {
+      return 'программа страницы 0 испорчена: ' + c.ST.prog[0] + ', ' + c.ST.prog[1];
+    }
+
+    c.ST.ip = 0;
+    c.step();                         /* снова на страницу 1 */
+    return eq(c.ST.prog[0], 0x53);
   });
 
   /* ---------- 6. ввод F0 с клавиатуры ---------- */
@@ -345,6 +377,7 @@
     if (!E.isExt(0x40)) return '0x40 не считается командой расширения';
     if (E.isExt(0x07)) return '0x07 ошибочно считается командой';
     if (String(E.extName(0x40)).indexOf('R0') < 0) return 'имя 0x40: ' + E.extName(0x40);
+    if (String(E.extName(0x63)).indexOf('R3') < 0) return 'имя 0x63: ' + E.extName(0x63);
     if (String(E.extName(0x24)).indexOf('страница') < 0) return 'имя 0x24: ' + E.extName(0x24);
     return true;
   });
