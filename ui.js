@@ -30,6 +30,25 @@
       страницы по 105, адреса внутри страницы двузначные — поэтому
       в листинге показывается «занято N из 105 · страница k/4 (всего 420)».
 
+   ПРАВКА v4 (25.11.2026) — листинг и двухбайтные команды расширения:
+
+   1. rowText знает префикс 0xF0: строка показывается ОДНОЙ командой
+      («банк 1», «страница 0», «адрес → X») с кодом «F0 01», а не двумя
+      строками «?» и «01». Второй байт читается по кругу — ровно так же,
+      как его читает ядро, иначе листинг и исполнение разойдутся.
+      Название операции берётся у MKExt61.extName — того же источника,
+      что у панели «Листинг расширения». Один источник имён на два экрана.
+
+   2. Размер строки стал свойством строки (info.wide): 1 обычная команда,
+      2 у префикса F0, 3 у перехода. Раньше «3» было зашито отдельно
+      только для переходов, а F0 шёл как одна ячейка — из-за этого после
+      каждой F0-команды нумерация съезжала на единицу.
+
+   3. «Занято N из 105» считается по ПРОГРАММЕ (MKDasm.used — последняя
+      непустая строка), а не по позиции счётчика команд. Раньше было
+      used = lastStep()+1: короткая программа после прогона до шага 50
+      показывала «занято 51».
+
    Два режима:
      work  — «Работа»: корпус, дисплей, клавиатура, Пуск/Сброс.
      study — «Учёба»: плюс четыре вкладки
@@ -53,6 +72,9 @@
   var NAME_KEY = 'pmk61/progmeta/';
   var RUN_LIMIT = 20000;
   var LOG_MAX = 100;
+
+  /* Префикс двухбайтных команд расширения. */
+  var EXT_PREFIX = 0xF0;
 
   /* Демонстрационная программа: 7! — 5040.
      R0 — счётчик цикла, R1 — накопитель. */
@@ -303,6 +325,11 @@
     return s.length < 2 ? '0' + s : s;
   }
 
+  function hex2(n) {
+    var s = (n & 0xFF).toString(16).toUpperCase();
+    return s.length < 2 ? '0' + s : s;
+  }
+
   /* Адрес для человека: «00»…«99» и «-0»…«-4». Печать живёт в ядре,
      чтобы листинг и индикатор не разошлись. */
   function addrText(n) {
@@ -470,12 +497,31 @@
 
   /* ---------- листинг программы ---------- */
 
-  /* Подпись строки. Адрес перехода берётся у ядра (jumpAddr): оно одно
-     знает, что 100…104 записываются как «•» + цифра, и что за пределами
-     профиля адреса нет. Своя арифметика a*10+b здесь больше не живёт. */
+  /* Подпись строки. Размер строки возвращается вместе с подписью (wide),
+     потому что он зависит от ПЕРВОГО байта:
+        0xF0    → 2 ячейки (префикс + второй байт)
+        переход → 3 ячейки (команда + десятки + единицы)
+        прочее  → 1 ячейка
+     Раньше «3» считалось отдельно в renderProgram только для переходов,
+     а F0 шёл как одна ячейка — и после каждой команды расширения адреса
+     съезжали на единицу, второй байт печатался как своя команда («01»),
+     а сам префикс как «?».
+
+     Имя операции у F0 берётся у MKExt61.extName — того же источника,
+     что у панели «Листинг расширения»: два экрана не могут разойтись. */
   function rowText(code, i) {
     var MK = window.MKCore;
-    if (code === MK.NOP) return { label: '—', code: '', empty: true };
+    if (code === MK.NOP) return { label: '—', code: '', empty: true, wide: 1 };
+
+    if (code === EXT_PREFIX) {
+      /* Второй байт читается по кругу — так же, как его берёт ядро,
+         иначе листинг покажет не то, что исполнится. */
+      var second = core.ST.prog[(i + 1) % core.PROG_LEN] & 0xFF;
+      var name = (window.MKExt61 && typeof window.MKExt61.extName === 'function')
+        ? window.MKExt61.extName(second)
+        : 'EXT ' + hex2(second);
+      return { label: name, code: 'F0 ' + hex2(second), empty: false, wide: 2 };
+    }
 
     if (MK.isJumpCmd(code)) {
       var a = core.ST.prog[(i + 1) % core.PROG_LEN];
@@ -484,10 +530,21 @@
       return {
         label: core.cmdName(code) + (ad >= 0 ? ' → ' + addrText(ad) : ' → ??'),
         code: MK.codeStr(code) + ' ' + a + b,
-        empty: false
+        empty: false,
+        wide: 3
       };
     }
-    return { label: core.cmdName(code), code: MK.codeStr(code), empty: false };
+    return { label: core.cmdName(code), code: MK.codeStr(code), empty: false, wide: 1 };
+  }
+
+  /* Сколько ячеек занимает программа по факту: конец последней непустой
+     строки. Пустая память даёт 0, а не 105. Считает декодер, у которого
+     те же правила размера строки, что и у листинга. */
+  function usedCells() {
+    if (window.MKDasm && typeof window.MKDasm.used === 'function') {
+      return window.MKDasm.used(core.ST.prog, { length: core.PROG_LEN });
+    }
+    return Math.max(core.lastStep() + 1, 0);
   }
 
   function renderProgram() {
@@ -506,7 +563,7 @@
     var left = document.createElement('span');
     left.textContent = progMeta ? ('Программа · ' + progLabel()) : 'Программа';
     var right = document.createElement('span');
-    var used = Math.max(last + 1, 0);
+    var used = usedCells();
     var page = pageText();
     var total = pagesTotal();
     right.innerHTML = 'адрес <b>' + addrText(st.ip) + '</b> · занято <b>' + used + '</b> из ' + core.PROG_LEN +
@@ -518,9 +575,9 @@
 
     var i = 0;
     while (i < end) {
-      var code = st.prog[i] & 255;
+      var code = st.prog[i] & 0xFF;
       var info = rowText(code, i);
-      var wide = (code !== MK.NOP && MK.isJumpCmd(code)) ? 3 : 1;
+      var wide = info.wide || 1;
 
       var row = document.createElement('div');
       row.className = 'prow' + (info.empty ? ' empty' : '') + (i === st.ip ? ' cur' : '');
@@ -886,6 +943,9 @@
       render();
       return { result: res, steps: steps, X: core.ST.X };
     },
+
+    /* сколько ячеек занято — по программе, а не по счётчику шагов */
+    usedCells: function () { return usedCells(); },
 
     setProgMeta: function (meta) { setProgMeta(meta); },
     progMeta: function () { return progMeta; },
