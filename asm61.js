@@ -23,6 +23,7 @@
      .3C                  байт напрямую по шестнадцатеричному коду
      42                   число из нескольких цифр — это несколько
                           команд-цифр подряд: 4 и 2 (правка v4)
+     .page 1              дальше собирать на страницу 1 (правка v5)
      БП 100               адрес выше 99: первая ячейка «·», вторая цифра
      БП -3                то же самое, как адрес пишут на бумаге и на индикаторе
 
@@ -63,6 +64,29 @@
    в числе знаков, и адреса считаются по ним. Ввод руками на МК-61
    работает так же: две цифры — две ячейки.
 
+   СТРАНИЦЫ
+
+   Правка v5 (25.11.2026): директива «.page N» переключает, куда пишется
+   дальнейший текст. Раньше любая собранная программа ложилась с нулевой
+   ячейки, поэтому команда F0 21 (перейти на страницу 1) вела в пустоту —
+   проверить страницы было нечем.
+
+   Как считается адрес. Внутри страницы адрес снова начинается с 00, и
+   ровно он записывается в ячейки перехода: на МК-61 адрес — это две
+   цифры, 00…104, других не бывает. У страницы свой номер, а не общий
+   адрес. Поэтому переход на метку с ДРУГОЙ страницы — ошибка сборки,
+   а не тихо неверный код: попасть туда можно только командой F0 2n,
+   и ассемблер об этом прямо и пишет.
+
+   Метки по-прежнему числа, но теперь абсолютные (страница × pageSize +
+   адрес). При одной странице это ровно прежние значения, поэтому старые
+   тесты и примеры не меняются.
+
+   Размер страницы и их число приходят опциями (pageSize, pages): сам
+   ассемблер про ядро не знает и по умолчанию считает одну страницу
+   в 105 ячеек. Промежутки между страницами заполняются НОП, чтобы
+   исполнение не проваливалось в мусор.
+
    ДВА ПРОХОДА
 
    Первый: посчитать адреса и запомнить метки. Длина команды известна
@@ -74,9 +98,9 @@
 
    ЧЕГО ФАЙЛ НЕ ДЕЛАЕТ
 
-   Не загружает программу в ядро и не знает про страницы расширения —
-   это дело интерфейса: он берёт готовый массив cells и отдаёт
-   core.setProgram(). Страницы появятся тогда же, когда появится редактор.
+   Не загружает программу в ядро: это дело интерфейса, он берёт готовый
+   массив cells и отдаёт core.setProgram(). И не решает, какая страница
+   видна на экране, — это делает команда F0 2n во время исполнения.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -90,6 +114,12 @@
 
   /* Модель по умолчанию: её профиль задаёт формат адреса. */
   var DEFAULT_MODEL = 'mk-61';
+
+  /* Размер страницы, если интерфейс не сказал свой. */
+  var DEFAULT_PAGE_SIZE = 105;
+
+  /* НОП — им заполняются промежутки между страницами. */
+  var NOP = 0x54;
 
   /* Латиница и кириллица — в верхний регистр, греческая π не трогается:
      иначе она превратилась бы в Π. Минусы разных начертаний — к обычному. */
@@ -237,6 +267,13 @@
     var t = norm(text);
     if (!t) return null;
 
+    /* Правка v5: «F0» без второго байта раньше молча превращался
+       в две нулевые ячейки, то есть в две команды «0». Программа
+       собиралась «успешно» и делала совсем не то. Теперь это ошибка. */
+    if (t === 'F0') {
+      return { type: 'err', msg: 'F0 без второго байта — нужна строка вида «F0 01»' };
+    }
+
     var m = /^F0 ([0-9A-F]{2})$/.exec(t);
     if (m) return { type: 'ext', bytes: [PREFIX, parseInt(m[1], 16)] };
 
@@ -270,10 +307,12 @@
   }
 
   /* ---------- сборка ----------
-     assemble(src, {model, maxAddr, maxCells}) →
+     assemble(src, {model, maxAddr, maxCells, pageSize, pages}) →
        {ok, cells, labels, errors, count}
 
-     model — модель из profiles.js: от неё зависят формат и границы адреса.
+     model    — модель из profiles.js: от неё зависят формат и границы адреса.
+     pageSize — ячеек на страницу (по умолчанию 105);
+     pages    — сколько страниц разрешено (по умолчанию 1, страницы — ext61).
 
      errors — массив {line, msg}; строка приведена, чтобы человек нашёл её
      в своём тексте. При ошибке cells всё равно отдаётся, но доверять
@@ -284,12 +323,18 @@
     var p = profileOf(model);
     var maxAddr = maxAddrOf(p, o);
     var maxCells = typeof o.maxCells === 'number' ? o.maxCells : 0;
+    var pageSize = (o.pageSize > 0) ? Math.round(o.pageSize) : DEFAULT_PAGE_SIZE;
+    var pages = (o.pages > 0) ? Math.round(o.pages) : 1;
 
     var lines = String(src == null ? '' : src).split(/\r?\n/);
     var items = [];
     var labels = {};
     var errors = [];
-    var addr = 0;
+    var page = 0;            /* текущая страница сборки */
+    var addr = 0;            /* адрес ВНУТРИ страницы, снова с нуля */
+    var overflowLine = 0;    /* первая строка, вылезшая за память */
+
+    function absAt(pg, a) { return pg * pageSize + a; }
 
     for (var li = 0; li < lines.length; li++) {
       var raw = lines[li];
@@ -308,18 +353,38 @@
         } else if (Object.prototype.hasOwnProperty.call(labels, name)) {
           errors.push({ line: li + 1, msg: 'Метка уже определена: ' + name });
         } else {
-          labels[name] = addr;
+          /* абсолютный адрес: страница + адрес внутри неё */
+          labels[name] = absAt(page, addr);
         }
         body = m[2];
       }
 
       if (!body || !body.trim()) continue;
 
+      var normBody = norm(body);
+
+      /* СТРАНИЦА (правка v5): «.page 1» — дальше собирать на страницу 1.
+         Адрес внутри страницы начинается заново с 00, потому что именно
+         его пишут в ячейки перехода: у МК-61 адрес — две цифры, 00…104. */
+      var pageDir = /^\.PAGE (\d+)$/.exec(normBody);
+      if (pageDir) {
+        var pn = parseInt(pageDir[1], 10);
+        if (pages <= 1) {
+          errors.push({ line: li + 1, msg: 'Страницы доступны только в режиме расширения (нужен ext61)' });
+        } else if (!(pn >= 0 && pn < pages)) {
+          errors.push({ line: li + 1, msg: 'Страница ' + pn + ' вне предела 0…' + (pages - 1) });
+        } else {
+          page = pn;
+          addr = 0;
+        }
+        continue;
+      }
+
       /* ЧИСЛО ИЗ НЕСКОЛЬКИХ ЦИФР (правка v4): «42» — это две команды,
          4 и 2, ровно как если бы их набрали клавишами. Раньше строка
          падала с «Неизвестная команда: 42», хотя двузначные значения
          в программах — обычное дело. */
-      var digitRun = /^\d+$/.exec(norm(body));
+      var digitRun = /^\d+$/.exec(normBody);
       if (digitRun && digitRun[0].length > 1) {
         var run = digitRun[0];
         for (var di = 0; di < run.length; di++) {
@@ -327,6 +392,7 @@
             type: 'byte',
             bytes: [parseInt(run.charAt(di), 10)],
             line: li + 1,
+            page: page,
             addr: addr
           });
           addr += 1;
@@ -341,26 +407,53 @@
         continue;
       }
       item.line = li + 1;
+      item.page = page;
       item.addr = addr;
       addr += itemLen(item);
       items.push(item);
     }
 
+    /* Ячейки пишутся по АБСОЛЮТНОМУ адресу: между страницами остаются
+       промежутки, и заполняются они НОП, а не мусором. */
     var cells = [];
+
+    function put(n, byte, ln) {
+      if (maxCells && n >= maxCells && !overflowLine) overflowLine = ln;
+      if (n < cells.length && cells[n] !== undefined) {
+        errors.push({ line: ln, msg: 'Адрес ' + n + ' уже занят — страницы перекрываются' });
+        return;
+      }
+      cells[n] = byte;
+    }
+
+    function putAt(it, off, byte) {
+      put(absAt(it.page, it.addr + off), byte, it.line);
+    }
+
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
 
       if (it.type === 'byte' || it.type === 'ext') {
-        for (var b = 0; b < it.bytes.length; b++) cells.push(it.bytes[b]);
+        for (var b = 0; b < it.bytes.length; b++) putAt(it, b, it.bytes[b]);
         continue;
       }
 
       /* переход: метка или адрес числом («05», «100», «-3») */
       var target = it.target;
-      var n = null;
+      var n = null;   /* ЛОКАЛЬНЫЙ адрес на странице команды */
 
       if (Object.prototype.hasOwnProperty.call(labels, target)) {
-        n = labels[target];
+        var abs = labels[target];
+        var tpage = Math.floor(abs / pageSize);
+        if (tpage !== it.page) {
+          errors.push({
+            line: it.line,
+            msg: 'Переход между страницами: метка «' + target + '» на странице ' + tpage +
+                 ', а команда — на ' + it.page + '. Нужна команда F0 2' + tpage
+          });
+        } else {
+          n = abs - tpage * pageSize;
+        }
       } else {
         var parsed = parseAddress(target, p, model);
         if (parsed >= 0) {
@@ -384,24 +477,39 @@
         }
       }
 
-      cells.push(it.code);
+      putAt(it, 0, it.code);
       if (!pair) {
-        cells.push(0x00, 0x00);
+        putAt(it, 1, 0x00);
+        putAt(it, 2, 0x00);
       } else {
-        cells.push(pair[0], pair[1]);
+        putAt(it, 1, pair[0]);
+        putAt(it, 2, pair[1]);
       }
     }
 
-    if (maxCells && cells.length > maxCells) {
-      errors.push({ line: 0, msg: 'Программа занимает ' + cells.length + ' ячеек, а помещается ' + maxCells });
+    /* промежутки между страницами — НОП: исполнение не должно
+       проваливаться в неинициализированную память */
+    var count = cells.length;
+    var out = new Array(count);
+    for (var k = 0; k < count; k++) {
+      out[k] = (cells[k] === undefined) ? NOP : (cells[k] & 0xFF);
+    }
+
+    if (maxCells && count > maxCells) {
+      errors.push({
+        line: overflowLine || 0,
+        msg: 'Программа занимает ' + count + ' ячеек, а помещается ' + maxCells
+      });
     }
 
     return {
       ok: errors.length === 0,
-      cells: cells,
+      cells: out,
       labels: labels,
       errors: errors,
-      count: cells.length
+      count: count,
+      pages: pages,
+      pageSize: pageSize
     };
   }
 
@@ -415,8 +523,8 @@
   /* Готовый массив для core.setProgram: длина памяти, пустые шаги — NOP. */
   function toProgram(cells, opts) {
     var o = opts || {};
-    var len = o.len > 0 ? Math.round(o.len) : 105;
-    var nop = typeof o.nop === 'number' ? (o.nop & 0xFF) : 0x54;
+    var len = o.len > 0 ? Math.round(o.len) : DEFAULT_PAGE_SIZE;
+    var nop = typeof o.nop === 'number' ? (o.nop & 0xFF) : NOP;
     var out = new Array(len);
     for (var i = 0; i < len; i++) out[i] = nop;
     if (Array.isArray(cells)) {
@@ -439,6 +547,8 @@
     tables: { simple: SIMPLE, range: RANGE, jumps: JUMPS },
     PREFIX: PREFIX,
     MAX_ADDR: MAX_ADDR,
-    DEFAULT_MODEL: DEFAULT_MODEL
+    DEFAULT_MODEL: DEFAULT_MODEL,
+    DEFAULT_PAGE_SIZE: DEFAULT_PAGE_SIZE,
+    NOP: NOP
   };
 })(typeof window !== 'undefined' ? window : this);
