@@ -55,11 +55,14 @@
    - проверки границ регистров остались: у МК-61 код 0x4F теперь пишет
      в R0, а код 0x4E по-прежнему работает с Re, как и положено.
 
-   Не исправлено (третий долг):
-     клавиша X→П не завершает набор числа: набрал 5, нажал X→П, нажал 7 —
-     получается 57, у настоящего ПМК было бы 7. Поведение задаётся в двух
-     местах (exec, блок hi === 4, и key, ветка sto), поэтому правка
-     отложена до проверки ручного ввода в интерфейсе.
+   Ревизия 7 — закрыт третий долг (X→П не завершал набор числа):
+     набрал 5, нажал X→П, нажал 7 — получалось 57, у настоящего ПМК 7.
+     Сброс набора сделан в ТРЁХ местах, иначе баг выживает в двух из них:
+       exec(), блок hi === 4          — запись X→П из программы и с клавиши;
+       step(), блок hi === 0xB        — косвенная запись K x→П;
+       key(), ветка sto               — ручное нажатие X→П в интерфейсе.
+     Чтение (hi === 6 и 0xD) и раньше закрывало набор, потому что идёт
+     через pushValue().
 
    НЕ реализованы и дают ЕГГ0Г:
      0x37…0x3A                K AND, K OR, K XOR, K ИНВ — руководство
@@ -567,6 +570,9 @@
         var stReg = regIndex(lo, REG_COUNT);
         if (stReg < 0) { setErr(); return; }
         ST.R[stReg] = norm(ST.X, MAXDIG);
+        /* Ревизия 7: X→П завершает набор числа. Без этих трёх строк
+           «5 X→П 7» даёт 57 — набор продолжается после записи. */
+        ST.typing = false; ST.input = ''; ST.exp = false;
         hint('X → R' + REG_NAMES[stReg]);
         return;
       }
@@ -735,6 +741,8 @@
         var tr = modReg(ST.R[lo], lo);
         if (tr < 0) return badAddress();
         ST.R[tr] = norm(ST.X, MAXDIG);
+        /* Ревизия 7: косвенная запись тоже завершает набор числа */
+        ST.typing = false; ST.input = ''; ST.exp = false;
         ST.ip = (ST.ip + 1) % PROG_LEN;
         return 'cont';
       }
@@ -950,7 +958,12 @@
           changed();
           return;
         }
-        if (mode === 'sto') { ST.R[k.r] = norm(ST.X, MAXDIG); hint('X → R' + REG_NAMES[k.r] + ' = ' + fmtNum(ST.X, MAXDIG)); }
+        if (mode === 'sto') {
+          ST.R[k.r] = norm(ST.X, MAXDIG);
+          /* Ревизия 7: ручное X→П завершает набор числа */
+          ST.typing = false; ST.input = ''; ST.exp = false;
+          hint('X → R' + REG_NAMES[k.r] + ' = ' + fmtNum(ST.X, MAXDIG));
+        }
         else if (mode === 'ld') { pushValue(ST.R[k.r]); hint('R' + REG_NAMES[k.r] + ' → X = ' + fmtNum(ST.R[k.r], MAXDIG)); }
         ST.await = null; ST.kind = null;
         changed();
