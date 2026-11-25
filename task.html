@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#15181b">
-<title>МК-61 · задание по сохранению программ</title>
+<title>МК-61 · расширение и задание по сохранению программ</title>
 <style>
   :root{
     --bg:#15181b; --panel:#1b1f23; --chip:#232a31; --edge:#2b333b;
@@ -31,6 +31,7 @@
   .sub{color:var(--muted); font-size:13px; margin:0 0 6px}
   .card{background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:12px; margin:10px 0}
   .goal{border-left:3px solid var(--accent); padding-left:10px}
+  .ext{border-left:3px solid var(--ok); padding-left:10px}
   .tw{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:8px 0}
   table{border-collapse:collapse; width:100%; font-size:13.5px; min-width:0}
   th,td{text-align:left; vertical-align:top; padding:7px 8px; border-bottom:1px solid var(--edge)}
@@ -61,10 +62,54 @@
 </head>
 <body>
 
-<h1>МК-61 · задание по сохранению и загрузке программ</h1>
-<p class="sub">Сводка всех договорённостей. Зафиксировано 26.11.2026.</p>
+<h1>МК-61 · расширение и задание по сохранению программ</h1>
+<p class="sub">Что расширяем и как — и сводка договорённостей по сохранению. 26.11.2026.</p>
 
-<h2>Главная цель</h2>
+<h2>Что за машина и что в ней расширено</h2>
+<div class="card ext">
+  <p><b>Базовая модель — МК-61.</b> Это не Б3-34: у МК-61 свой набор команд, свои страницы и своя клавиатура. Б3-34 в проекте упоминается только как <b>название расширения</b> — исторически это фамилия серии, но расширяем мы именно МК-61.</p>
+  <p>Расширение сделано надстройкой <code>ext61.js</code> поверх чистого ядра <code>core.js</code>: ядро считает как настоящий МК-61, а расширение даёт ему больше памяти и управление банками через команду <code>F0</code>.</p>
+</div>
+
+<h3>Что именно расширяется</h3>
+<div class="tw"><table>
+  <tr><th>Что</th><th>Было (МК-61)</th><th>Стало с расширением</th></tr>
+  <tr><td>Регистры</td><td>15 (R0…Re)</td><td><b>4 банка × 15 = 60</b> регистров</td></tr>
+  <tr><td>Программа</td><td>105 шагов</td><td><b>4 страницы × 105 = 420</b> шагов</td></tr>
+  <tr><td>Доступ к чужому банку</td><td>—</td><td><code>F0 40…4F</code> и <code>F0 60…6F</code> — <b>без переключения банка</b></td></tr>
+  <tr><td>Команда управления</td><td>—</td><td><code>F0</code> + второй байт, <b>две ячейки программы</b></td></tr>
+</table></div>
+
+<h3>Коды <code>F0</code> — как устроено сейчас</h3>
+<div class="tw"><table>
+  <tr><th>Код</th><th>Действие</th></tr>
+  <tr><td><code>F0 00…03</code></td><td>выбрать банк 0…3</td></tr>
+  <tr><td><code>F0 04</code></td><td>номер текущего банка → X</td></tr>
+  <tr><td><code>F0 05</code></td><td>адрес текущего банка → X</td></tr>
+  <tr><td><code>F0 06</code></td><td>адрес текущего банка ← X</td></tr>
+  <tr><td><code>F0 10</code></td><td>номер страницы → X</td></tr>
+  <tr><td><code>F0 11</code></td><td>номер страницы ← X</td></tr>
+  <tr><td><code>F0 20…23</code></td><td>выбрать страницу программы 0…3</td></tr>
+  <tr><td><code>F0 24</code></td><td>номер текущей страницы → X</td></tr>
+  <tr><td><code>F0 40…4F</code></td><td>x→П в банк-адресат (<code>0F</code> — это R0)</td></tr>
+  <tr><td><code>F0 60…6F</code></td><td>П→x из банка-адресата (<code>0F</code> — это R0)</td></tr>
+</table></div>
+
+<p><b>Важно для адресов:</b> <code>F0</code> вместе со вторым байтом занимает <b>две</b> ячейки программы. Обычная команда — одну, переход — три. Если считать <code>F0</code> за одну ячейку, все адреса после неё съезжают.</p>
+<p>Если <code>F0</code> стоит в последней ячейке страницы, второй байт берётся с нулевого адреса — как в реальном исполнении.</p>
+
+<h3>Что уже работает, а что нет</h3>
+<div class="tw"><table>
+  <tr><th>Часть</th><th>Состояние</th></tr>
+  <tr><td>Ядро: команды, регистры, переходы</td><td class="ok">готово</td></tr>
+  <tr><td>Расширение: банки, страницы, <code>F0 40/60</code></td><td class="ok">30/30 проверок</td></tr>
+  <tr><td>Декодер и листинг</td><td class="ok">32/32 проверки</td></tr>
+  <tr><td>Панель «Листинг расширения»</td><td class="ok">есть, только чтение</td></tr>
+  <tr><td>Ввод <code>F0</code> с клавиатуры калькулятора</td><td class="warn">в работе</td></tr>
+  <tr><td>Исполнение расширения в интерфейсе</td><td class="warn">следующий шаг</td></tr>
+</table></div>
+
+<h2>Главная цель задания</h2>
 <div class="card goal">
   <p>Сохранять программу <b>парой</b>: коды калькулятора и ассемблер — вместе.</p>
   <p>При <b>выгрузке</b> — всё в одно место (один файл).<br>
@@ -152,7 +197,7 @@
   <li>большое поле на отдельной странице;</li>
   <li>подсветка строк и меток;</li>
   <li>номера адресов слева;</li>
-  <li>кнопки-вставки команд;</li>
+  <li>кнопки-вставки команд, включая <code>F0</code>;</li>
   <li>проверка при вводе;</li>
   <li>список ошибок с номерами строк.</li>
 </ul>
