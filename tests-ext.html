@@ -154,8 +154,106 @@
   (function () {
     var n = MKExt61.extName(0x01);
     var u = MKExt61.extName(0x77);
-    check('описание EXT-команд', n === 'банк 1' && u === 'неизвестная EXT-команда',
+    var st = MKExt61.extName(0x40);
+    check('описание EXT-команд',
+          n === 'банк 1' && u === 'неизвестная EXT-команда' && st.indexOf('x→П') === 0,
           n + ' / ' + u);
+  })();
+
+  /* ---------- 13. F0 40: запись в другой банк без переключения ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([
+      0x02,          /* 00: 2                       */
+      0xF0, 0x05,    /* 01: банк-адресат = 2        */
+      0x0D,          /* 03: Cx                      */
+      0x07,          /* 04: 7                       */
+      0xF0, 0x40,    /* 05: RG0 банка 2 ← 7         */
+      0x50           /* 07: С/П                     */
+    ]);
+    var r = m.run(100);
+    var cur0 = m.core.ST.R[0];
+    var stillBank = m.bank();
+    m.selectBank(2);
+    var inBank2 = m.core.ST.R[0];
+    check('F0 40 пишет в другой банк',
+          r.x === 7 && cur0 === 0 && inBank2 === 7 && stillBank === 0,
+          'X=' + r.x + ', банк0 RG0=' + cur0 + ', банк2 RG0=' + inBank2 + ', банк=' + stillBank);
+  })();
+
+  /* ---------- 14. F0 60: чтение из другого банка ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([
+      0x05, 0x40,    /* 00: RG0 банка 0 = 5         */
+      0xF0, 0x02,    /* 02: перейти в банк 2        */
+      0x09, 0x40,    /* 04: RG0 банка 2 = 9         */
+      0xF0, 0x00,    /* 06: вернуться в банк 0      */
+      0x02,          /* 08: 2                       */
+      0xF0, 0x05,    /* 09: банк-адресат = 2        */
+      0xF0, 0x60,    /* 0B: X ← RG0 банка 2         */
+      0x50           /* 0D: С/П                     */
+    ]);
+    var r = m.run(200);
+    check('F0 60 читает из другого банка',
+          r.x === 9 && m.bank() === 0,
+          'X=' + r.x + ', банк=' + m.bank());
+  })();
+
+  /* ---------- 15. банк-адресат вне диапазона — ЕГГ0Г ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x04, 0xF0, 0x05, 0x50]);   /* адресат = 4 */
+    var r = m.run(20);
+    check('адресат 4 → ЕГГ0Г', r.result === 'error', 'result=' + r.result);
+  })();
+
+  /* ---------- 16. дробный банк-адресат — ЕГГ0Г ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x02, 0x0A, 0x05, 0xF0, 0x05, 0x50]);   /* 2.5 */
+    var r = m.run(20);
+    check('адресат 2,5 → ЕГГ0Г', r.result === 'error', 'result=' + r.result);
+  })();
+
+  /* ---------- 17. F0 06 отдаёт адресата, X не теряется ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x03, 0xF0, 0x05, 0xF0, 0x06, 0x50]);
+    var r = m.run(50);
+    check('F0 06 отдаёт банк-адресат',
+          r.x === 3 && m.targetBank() === 3,
+          'X=' + r.x + ', адресат=' + m.targetBank());
+  })();
+
+  /* ---------- 18. F0 4F пишет в R0 другого банка (F = R0) ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([
+      0x06,          /* 00: 6                        */
+      0xF0, 0x01,    /* 01: текущий банк = 1         */
+      0xF0, 0x4F,    /* 03: RG0 банка 0 ← 6          */
+      0x50           /* 05: С/П                      */
+    ]);
+    var r = m.run(50);
+    var bank1 = m.core.ST.R[0];
+    m.selectBank(0);
+    var bank0 = m.core.ST.R[0];
+    check('F0 4F = R0 нужного банка',
+          bank1 === 0 && bank0 === 6,
+          'банк1 RG0=' + bank1 + ', банк0 RG0=' + bank0);
+  })();
+
+  /* ---------- 19. полный сброс возвращает адресата в 0 ---------- */
+  (function () {
+    var m = fresh();
+    m.core.setProgram([0x02, 0xF0, 0x05, 0x50]);
+    m.run(50);
+    var before = m.targetBank();
+    m.core.reset(false);
+    check('сброс обнуляет банк-адресат',
+          before === 2 && m.targetBank() === 0,
+          'до=' + before + ', после=' + m.targetBank());
   })();
 
   var sum = document.createElement('div');
