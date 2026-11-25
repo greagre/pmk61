@@ -97,8 +97,8 @@
   <div class="foot">
     <a href="tests.html?v=13">Проверка ядра МК-61</a> ·
     <a href="tests-library.html">Проверка библиотеки</a> ·
-    <a href="tests-ext.html?v=13">Проверка расширения</a> ·
-    <a href="tests-disasm.html?v=1">Проверка декодера</a>
+    <a href="tests-ext.html?v=14">Проверка расширения</a> ·
+    <a href="tests-disasm.html?v=10">Проверка декодера</a>
   </div>
 </div>
 
@@ -149,14 +149,18 @@
 })();
 </script>
 
+<!-- Расширение подключается ДО ui.js: он создаёт ядро синхронно,
+     и ext61-boot.js должен успеть подменить фабрику. -->
 <script src="core.js?v=13"></script>
 <script src="profiles.js?v=13"></script>
+<script src="ext61.js?v=2"></script>
+<script src="disasm61.js?v=2"></script>
+<script src="ext61-boot.js?v=1"></script>
+
 <script src="profiles-ui.js?v=1"></script>
 <script src="ui.js?v=1"></script>
 <script src="shelf.js?v=1"></script>
-<script src="ext61.js?v=1"></script>
-<script src="disasm61.js?v=1"></script>
-<script src="ext61-ui.js?v=1"></script>
+<script src="ext61-ui.js?v=2"></script>
 
 <script>
 /* Переключатель угла Р-ГРД-Г — как в 34-й:
