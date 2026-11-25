@@ -159,6 +159,26 @@
 
    Кому нужна очистка ТОЛЬКО текста, с сохранением программы в памяти:
    выделить всё в поле и стереть клавишей — память при этом не трогается.
+
+   ПРАВКА v10 (25.11.2026) — «Пример» больше не грузит, кнопка не «залипает»
+
+   Два наблюдения с живого экрана, оба верны.
+
+   Первое: кнопка «Пример» сразу клала программу в память (так было
+   с v3). Из-за этого «Собрать и загрузить» после примера уже ничего
+   не меняла — код калькулятора появлялся ещё до неё, и кнопка выглядела
+   бесполезной. Порядок возвращён к прежнему, понятному: пример только
+   вставляет текст и показывает, что он собирается и сколько займёт
+   ячеек; в память программа попадает ровно по нажатию «Собрать
+   и загрузить».
+
+   Второе: у главной кнопки была постоянная синяя заливка (класс main),
+   и она читалась как «всегда нажата» — тем более что телефон после тапа
+   оставляет рамку фокуса. Заливка убрана: акцент остался в цвете рамки
+   и весе шрифта, а фокус после нажатия снимается.
+
+   Ни одна строка сборки и подсчёта при этом не изменилась: правка
+   целиком в поведении кнопок, чистая часть та же, и её тесты не тронуты.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -507,8 +527,9 @@
       '.asm-panel textarea{width:100%;min-height:120px;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.45;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:rgba(0,0,0,.06);color:inherit;resize:vertical}',
       '.asm-panel select{width:100%;box-sizing:border-box;margin-bottom:8px;padding:8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:transparent;color:inherit;font-size:13px}',
       '.asm-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}',
-      '.asm-row button{padding:8px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font-size:13px}',
-      '.asm-row button.main{background:rgba(70,140,255,.18);border-color:rgba(70,140,255,.6)}',
+      '.asm-row button{padding:8px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font-size:13px;-webkit-tap-highlight-color:transparent}',
+      '.asm-row button.main{font-weight:600;border-color:rgba(70,140,255,.6)}',
+      '.asm-row button:focus:not(:focus-visible){outline:none}',
       '.asm-stat{margin-top:8px;font-size:12px;opacity:.85}',
       '.asm-stat.ok{color:#1a8c4a}',
       '.asm-stat.err{color:#c0392b}',
@@ -617,6 +638,10 @@
     expectEl.textContent = text;
   }
 
+  function hintText(msg) {
+    if (global.MKUI && typeof global.MKUI.hint === 'function') global.MKUI.hint(msg);
+  }
+
   function compile(andLoad) {
     if (!area) return null;
     var core = (global.MKUI && typeof global.MKUI.getCore === 'function') ? global.MKUI.getCore() : null;
@@ -634,23 +659,24 @@
     if (res.ok && andLoad && global.MKUI && typeof global.MKUI.loadProgram === 'function') {
       /* Отдаём все 420 ячеек: ext61 сам режет их по страницам (v10). */
       global.MKUI.loadProgram(res.program, null, { title: 'Из текста' });
-      if (typeof global.MKUI.hint === 'function') {
-        if (res.used === 0) {
-          /* Пустая программа — это и есть очистка памяти: 420 НОП. */
-          global.MKUI.hint('Память очищена: все ' + res.program.length + ' ячеек пусты.');
-        } else {
-          var where = (res.pagesUsed > 1)
-            ? 'страниц задействовано ' + res.pagesUsed
-            : 'адрес 00';
-          global.MKUI.hint('Занято ' + res.used + ' яч. · программа в памяти, ' + where + '. Жми «Пуск».');
-        }
+      if (res.used === 0) {
+        /* Пустая программа — это и есть очистка памяти: 420 НОП. */
+        hintText('Память очищена: все ' + res.program.length + ' ячеек пусты.');
+      } else {
+        var where = (res.pagesUsed > 1)
+          ? 'страниц задействовано ' + res.pagesUsed
+          : 'адрес 00';
+        hintText('Занято ' + res.used + ' яч. · программа в памяти, ' + where + '. Жми «Пуск».');
       }
     }
     return res;
   }
 
-  /* Вставить выбранный пример, сразу собрать и положить в память:
-     от выбора до результата два нажатия — пример и «Пуск». */
+  /* Вставить выбранный пример в поле. В память он НЕ попадает: до v10
+     эта кнопка сразу грузила программу, и «Собрать и загрузить» после
+     неё уже ничего не меняла — код калькулятора появлялся внизу ещё
+     до нажатия, и кнопка выглядела бесполезной. Порядок снова прежний:
+     пример вставляет текст, память меняет только «Собрать и загрузить». */
   function insertExample() {
     if (!area || !picker) return null;
     var ex = findExample(picker.value === CUSTOM ? EXAMPLES[0].id : picker.value);
@@ -658,7 +684,11 @@
     saveText();
     syncPickerToText();
     updateExpect();
-    return compile(true);
+    /* Собираем только для проверки: строка «Занято N из 420» говорит,
+       что пример чистый и сколько займёт, а листинги ниже не меняются. */
+    var res = compile(false);
+    hintText('Пример «' + ex.name + '» вставлен в поле. Нажми «Собрать и загрузить», чтобы он попал в память.');
+    return res;
   }
 
   function mount() {
@@ -707,7 +737,10 @@
     var bLoad = mk('button', 'main', 'Собрать и загрузить');
     bLoad.type = 'button';
     bLoad.title = 'Собрать текст и положить программу в память калькулятора';
-    bLoad.addEventListener('click', function () { compile(true); });
+    bLoad.addEventListener('click', function () {
+      compile(true);
+      this.blur();
+    });
     row.appendChild(bLoad);
 
     /* Название говорит ровно то, что делает кнопка: собрать и проверить
@@ -716,13 +749,21 @@
     var bCheck = mk('button', null, 'Проверить сборку');
     bCheck.type = 'button';
     bCheck.title = 'Собрать текст и показать ошибки, не трогая память калькулятора';
-    bCheck.addEventListener('click', function () { compile(false); });
+    bCheck.addEventListener('click', function () {
+      compile(false);
+      this.blur();
+    });
     row.appendChild(bCheck);
 
+    /* v10: только вставляет текст. Программа попадает в память
+       по кнопке «Собрать и загрузить» — иначе та теряет смысл. */
     var bExample = mk('button', null, 'Пример');
     bExample.type = 'button';
-    bExample.title = 'Вставить выбранный пример и сразу загрузить его в память';
-    bExample.addEventListener('click', function () { insertExample(); });
+    bExample.title = 'Вставить выбранный пример в поле (в память — по кнопке «Собрать и загрузить»)';
+    bExample.addEventListener('click', function () {
+      insertExample();
+      this.blur();
+    });
     row.appendChild(bExample);
 
     /* v9: чистит и поле, и память. Раньше кнопка звалась «Очистить поле»
@@ -761,8 +802,9 @@
       'Страница: .page 1. Метка: имя:. Адреса: 05, 100, -3. Комментарий: ; или #. ' +
       'Ошибки в списке кликабельны — курсор встанет на нужную строку. ' +
       '«Проверить сборку» память не трогает: текущая программа останется на месте. ' +
-      'Листинги ниже показывают ПАМЯТЬ калькулятора, а не текст поля: ' +
-      'пока не нажмёшь «Собрать и загрузить», они про прежнюю программу.'));
+      '«Пример» только вставляет текст — в память программа попадает по кнопке ' +
+      '«Собрать и загрузить». Листинги ниже показывают ПАМЯТЬ калькулятора, ' +
+      'а не текст поля.'));
 
     host.parentNode.insertBefore(panel, host);
     loadText();
