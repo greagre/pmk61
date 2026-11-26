@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Порядок условных переходов — проверка</title>
+<style>
+  :root {
+    --bg: #f6f6f4;
+    --card: #ffffff;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+    --line: #dcdcd6;
+    --ok: #1a8c4a;
+    --okbg: #e7f6ec;
+    --bad: #b3261e;
+    --badbg: #fdecea;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181a; --card: #1f2226; --ink: #e8e8e6; --muted: #9a9a96;
+      --line: #33373c; --ok: #4cd07d; --okbg: #14301f;
+      --bad: #ff7b72; --badbg: #39189c1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 14px 60px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 860px; margin-inline: auto;
+  }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .lead { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin: 0 0 14px;
+  }
+  .card h2 { font-size: 16px; margin: 0 0 10px; }
+  pre {
+    margin: 0; padding: 10px 12px; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px;
+    font: 13px/1.5 var(--mono); white-space: pre; overflow-x: auto;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .pill {
+    display: inline-block; padding: 3px 9px; border-radius: 999px;
+    font: 12px/1.6 var(--mono); border: 1px solid var(--line);
+  }
+  .pill.ok { color: var(--ok); background: var(--okbg); border-color: transparent; }
+  .pill.bad { color: var(--bad); background: var(--badbg); border-color: transparent; }
+  .verdict { font-weight: 600; }
+  .verdict.ok { color: var(--ok); }
+  .verdict.bad { color: var(--bad); }
+  .note { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .err { color: var(--bad); font: 13px/1.5 var(--mono); white-space: pre-wrap; }
+  code { font-family: var(--mono); font-size: .94em; }
+  .final {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-top: 20px;
+  }
+  .final h2 { font-size: 16px; margin: 0 0 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td {
+    text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.mono { font-family: var(--mono); }
+  .wait { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Порядок условных переходов</h1>
+<p class="lead">
+  Для каждого условия два прогона: условие выполнено и не выполнено.
+  Перед проверкой в R9 кладётся <b>111</b>. Если переход сработал —
+  программа запишет <b>222</b>. Если не сработал — останется <b>111</b>.
+  Что в R9, то и есть ответ: сработал переход или нет.
+</p>
+
+<div class="card">
+  <h2>Шаблон программы</h2>
+<pre>1
+1
+X→П 9
+&lt;УСЛОВИЕ на NEXT&gt;
+1
+1
+1
+БП DONE
+NEXT: 2
+2
+2
+DONE: П→X 9
+С/П</pre>
+  <p class="note">
+    В листинге адреса считаются автоматически — их не надо угадывать.
+    <code>NEXT</code> — метка на двойку, <code>DONE</code> — метка на чтение R9.
+  </p>
+</div>
+
+<div id="out"></div>
+
+<div class="final" id="summary">
+  <h2>Сводка</h2>
+  <table id="sumTable">
+    <thead>
+      <tr><th>Условие</th><th>Значение X</th><th>X на деле</th><th>Переход</th><th>R9</th></tr>
+    </thead>
+    <tbody><tr><td colspan="5" class="wait">Прогон ещё не завершён…</td></tr></tbody>
+  </table>
+</div>
+
+<script src="core.js"></script>
+<script src="profiles.js"></script>
+<script src="asm61.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- что проверяем ----------
+  // Каждый случай: команда условия, значение X, и true/false — «условие должно сработать?»
+  const CASES = [
+    // F X=0 — истина при X = 0
+    { cond: 'F X=0',  x: '0',  expectFires: true,  label: 'X = 0' },
+    { cond: 'F X=0',  x: '5',  expectFires: false, label: 'X = 5' },
+    // F X≠0 — истина при X ≠ 0
+    { cond: 'F X≠0',  x: '5',  expectFires: true,  label: 'X = 5' },
+    { cond: 'F X≠0',  x: '0',  expectFires: false, label: 'X = 0' },
+    // F X<0 — истина при X < 0
+    { cond: 'F X<0',  x: '-3', expectFires: true,  label: 'X = −3' },
+    { cond: 'F X<0',  x: '5',  expectFires: false, label: 'X = 5' },
+    // F X≥0 — истина при X ≥ 0
+    { cond: 'F X≥0',  x: '5',  expectFires: true,  label: 'X = 5' },
+    { cond: 'F X≥0',  x: '-3', expectFires: false, label: 'X = −3' }
+  ];
+
+  // ---------- сборка текста программы ----------
+  function buildSource(cond, x) {
+    // x = '0' | '5' | '-3' — раскладываем в последовательность команд-цифр,
+    // потому что ассемблер принимает по одной цифре на строку.
+    const lines = [];
+    lines.push('1');
+    lines.push('1');
+    lines.push('X→П 9');
+    lines.push(cond + ' NEXT');
+    lines.push('1');
+    lines.push('1');
+    lines.push('1');
+    lines.push('БП DONE');
+    lines.push('NEXT: 2');
+    lines.push('2');
+    lines.push('2');
+    lines.push('DONE: П→X 9');
+    lines.push('С/П');
+    return lines.join('\n');
+  }
+
+  // ---------- запуск ----------
+  function runCase(c) {
+    const src = buildSource(c.cond, c.x);
+    const result = { src, cond: c.cond, x: c.x, label: c.label };
+
+    // 1) сборка
+    let built;
+    try {
+      built = window.MKAsm.buildProgram(src);
+    } catch (e) {
+      result.error = 'Исключение при сборке: ' + (e && e.message ? e.message : e);
+      return result;
+    }
+    if (!built || !built.ok) {
+      const msg = (built && built.errors && built.errors.length)
+        ? built.errors.map(function (e) {
+            return (typeof e === 'string') ? e : (e.text || e.message || JSON.stringify(e));
+          }).join('\n')
+        : 'ассемблер вернул ok:false без списка ошибок';
+      result.error = 'Сборка не удалась:\n' + msg;
+      return result;
+    }
+
+    result.listing = built.listing || null;
+
+    // 2) ядро
+    let core;
+    try {
+      core = window.MKCore.create({ model: 'mk-61' });
+    } catch (e) {
+      try {
+        core = window.MKCore.create();
+      } catch (e2) {
+        result.error = 'Не удалось создать ядро: ' + (e2 && e2.message ? e2.message : e2);
+        return result;
+      }
+    }
+
+    try {
+      if (typeof core.loadProgram === 'function') {
+        core.loadProgram(built.codes);
+      } else if (typeof core.setProgram === 'function') {
+        core.setProgram(built.codes);
+      } else {
+        result.error = 'Ядро без метода загрузки программы (ни loadProgram, ни setProgram)';
+        return result;
+      }
+
+      // Ставим X = нужное значение перед прогоном
+      if (typeof core.setX === 'function') {
+        core.setX(Number(c.x));
+      } else if (typeof core.putX === 'function') {
+        core.putX(Number(c.x));
+      } else if (core.state && typeof core.state === 'object' && 'x' in core.state) {
+        core.state.x = Number(c.x);
+      }
+
+      // Прогон
+      let steps = 0;
+      const MAX = 5000;
+      let status = 'unknown';
+      while (steps < MAX) {
+        const r = core.step ? core.step() : null;
+        steps++;
+        if (r && (r.status === 'stop' || r === 'stop')) { status = 'stop'; break; }
+        if (r && (r.status === 'error' || r === 'error')) { status = 'error'; break; }
+        if (!core.step) break;
+      }
+      result.steps = steps;
+      result.status = status;
+
+      // Читаем, что в R9
+      let r9 = null;
+      if (typeof core.getReg === 'function') r9 = core.getReg(9);
+      else if (typeof core.readReg === 'function') r9 = core.readReg(9);
+      else if (core.regs && typeof core.regs === 'object') r9 = core.regs[9];
+
+      let xv = null;
+      if (typeof core.getX === 'function') xv = core.getX();
+      else if (core.state && 'x' in core.state) xv = core.state.x;
+
+      result.r9 = r9;
+      result.xAfter = xv;
+    } catch (e) {
+      result.error = 'Ошибка при прогоне: ' + (e && e.message ? e.message : e);
+    }
+
+    return result;
+  }
+
+  // ---------- отрисовка ----------
+  const out = document.getElementById('out');
+  const sumBody = document.querySelector('#sumTable tbody');
+  const summaryRows = [];
+
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, function (ch) {
+      return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : '&gt;';
+    });
+  }
+
+  CASES.forEach(function (c, i) {
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const res = runCase(c);
+
+    let body = '<h2>' + (i + 1) + '. ' + esc(c.cond) + ' при ' + esc(c.label) + '</h2>';
+    body += '<pre>' + esc(c.src) + '</pre>';
+
+    let firedKnown = null;
+    let fired = null;
+
+    if (res.error) {
+      body += '<div class="row"><span class="pill bad">ошибка</span></div>';
+      body += '<div class="err">' + esc(res.error) + '</div>';
+    } else {
+      const r9 = res.r9;
+      // 111 → условие НЕ сработало; 222 → сработало
+      let verdictText = '';
+      if (r9 === 222) { fired = true;  firedKnown = true; }
+      else if (r9 === 111) { fired = false; firedKnown = true; }
+      else if (r9 === 0 || r9 === null || r9 === undefined) {
+        firedKnown = false;
+        verdictText = 'R9 пуст или 0 — программа, похоже, не дошла до записи';
+      } else {
+        firedKnown = false;
+        verdictText = 'R9 = ' + r9 + ' — не 111 и не 222, разбираем дальше';
+      }
+
+      body += '<div class="row">';
+      body += '<span class="pill">шагов: ' + res.steps + '</span>';
+      body += '<span class="pill">статус: ' + esc(res.status) + '</span>';
+      body += '<span class="pill">R9: <b>' + esc(r9) + '</b></span>';
+      body += '<span class="pill">X после: ' + esc(res.xAfter) + '</span>';
+      body += '</div>';
+
+      if (firedKnown) {
+        const ok = (fired === c.expectFires);
+        body += '<div class="row"><span class="pill ' + (ok ? 'ok' : 'bad') + '">' +
+                (fired ? 'переход СРАБОТАЛ' : 'переход НЕ сработал') + '</span></div>';
+        if (!ok) {
+          body += '<p class="note">Ожидалось: ' + (c.expectFires ? 'сработать' : 'не сработать') + '. ' +
+                  'Значит правило в книге (глава 6) неверное — надо перевернуть.</p>';
+        }
+      } else {
+        body += '<p class="note">' + esc(verdictText) + '</p>';
+      }
+    }
+
+    card.innerHTML = body;
+    out.appendChild(card);
+
+    summaryRows.push({
+      cond: c.cond,
+      label: c.label,
+      expect: c.expectFires,
+      fired: firedKnown ? fired : null,
+      r9: res.error ? 'ошибка' : res.r9,
+      error: res.error || null
+    });
+  });
+
+  // Сводка
+  sumBody.innerHTML = '';
+  summaryRows.forEach(function (r) {
+    const tr = document.createElement('tr');
+    const fireCell = (r.fired === null)
+      ? '<span class="pill bad">не определено</span>'
+      : '<span class="pill ' + (r.fired === r.expect ? 'ok' : 'bad') + '">' +
+        (r.fired ? 'сработал' : 'не сработал') + '</span>';
+    tr.innerHTML =
+      '<td class="mono">' + esc(r.cond) + '</td>' +
+      '<td class="mono">' + esc(r.label) + '</td>' +
+      '<td class="mono">' + esc(r.r9) + '</td>' +
+      '<td>' + fireCell + '</td>' +
+      '<td>' + (r.error ? '<span class="pill bad">ошибка</span>' : '<span class="pill ok">ок</span>') + '</td>';
+    sumBody.appendChild(tr);
+  });
+})();
+</script>
+</body>
+</html>
