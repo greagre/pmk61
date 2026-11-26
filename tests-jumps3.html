@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Порядок переходов · pmk61</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px; background: #f2efe6; color: #24211c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; padding-top: 14px;
+       border-top: 2px solid #d8d2c2; }
+  .sub { font-size: 13px; color: #6b655a; margin-bottom: 12px; line-height: 1.45; }
+  .sum { font-size: 15px; font-weight: 600; padding: 10px 12px; border-radius: 10px;
+         background: #e6e1d3; margin-bottom: 12px; }
+  .sum.ok { background: #d9efdc; color: #1b5e20; }
+  .sum.bad { background: #f7dcdc; color: #8e1b1b; }
+  .card { background: #fffdf7; border: 1px solid #ddd6c4; border-radius: 10px;
+          padding: 10px 12px; margin: 0 0 12px; }
+  .card.ok { border-color: #7fb884; }
+  .card.bad { border-color: #d18b8b; }
+  .ttl { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px;
+         border-radius: 6px; margin-left: 6px; vertical-align: middle; }
+  .tag.ok { background: #d9efdc; color: #1b5e20; }
+  .tag.bad { background: #f7dcdc; color: #8e1b1b; }
+  .tag.warn { background: #fbeecb; color: #7a5300; }
+  pre { background: #efeade; border-radius: 6px; padding: 7px 9px; margin: 6px 0;
+        font-size: 12px; line-height: 1.4; overflow-x: auto; white-space: pre-wrap; }
+  table { border-collapse: collapse; font-size: 12px; margin: 6px 0; width: 100%; }
+  th, td { border: 1px solid #ddd6c4; padding: 3px 6px; text-align: left; }
+  th { background: #e9e4d5; }
+  .kv { font-size: 12px; color: #4a463d; margin: 6px 0; line-height: 1.6; }
+  .kv b { color: #24211c; }
+  .expect { font-size: 12px; color: #6b655a; margin-bottom: 4px; }
+  code { background: #e8e3d5; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Порядок переходов</h1>
+<div class="sub">
+  Каждая карточка собрана настоящим ассемблером и прогнана на настоящем ядре.
+  Показаны: листинг с адресами, число шагов, статус, все регистры, дамп памяти.
+  Файлы: core.js, ext61.js, asm61.js, asm-editor.js.
+</div>
+<div class="sum" id="sum">Считаю…</div>
+
+<h2>Часть 1. Работает ли БП и подпрограмма</h2>
+<div id="bp"></div>
+
+<h2>Часть 2. Условные переходы</h2>
+<div class="sub">
+  В R9 заранее кладём 111. Сработал переход — программа запишет 222.
+  R9 = 222 → переход сработал, R9 = 111 → не сработал.
+</div>
+<div id="cond"></div>
+
+<h2>Сводка</h2>
+<div id="total"></div>
+
+<script src="core.js?v=14"></script>
+<script src="ext61.js?v=11"></script>
+<script src="asm61.js?v=5"></script>
+<script src="asm-editor.js?v=6"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PAGE_SIZE = 105;
+  var PAGES = 4;
+  var LEN = PAGE_SIZE * PAGES;
+
+  var bpBox = document.getElementById('bp');
+  var condBox = document.getElementById('cond');
+  var sumEl = document.getElementById('sum');
+  var totalEl = document.getElementById('total');
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function show(v) {
+    if (v === undefined || v === null) return '—';
+    if (typeof v !== 'number') return String(v);
+    if (!isFinite(v)) return String(v);
+    return String(Math.round(v * 1e8) / 1e8);
+  }
+
+  function makeExt() {
+    return MKExt61.create({
+      progLen: PAGE_SIZE,
+      regCount: 15,
+      addrHigh: true,
+      addrHighFirst: 100,
+      addrHighLast: 104
+    });
+  }
+
+  function build(ext, text) {
+    return MKAsmEditor.buildProgram(text, {
+      core: ext.core,
+      len: LEN,
+      pageSize: PAGE_SIZE,
+      pages: PAGES
+    });
+  }
+
+  function regOfBank(ext, bankIdx, reg) {
+    var was = ext.bank();
+    ext.selectBank(bankIdx);
+    var v = ext.ST.R[reg];
+    ext.selectBank(was);
+    return v;
+  }
+
+  function dumpProg(ext, count) {
+    var prog = ext.ST.prog;
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      out.push((i < 10 ? '0' : '') + i + ':' + MKCore.hex2(prog[i]));
+    }
+    return out.join('  ');
+  }
+
+  function findAll(ext, count) {
+    var prog = ext.ST.prog;
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      if (prog[i] === 0x50) out.push(i);
+    }
+    return out;
+  }
+
+  /* Прогон одной программы с полной диагностикой.
+     Возвращает объект со всем, что нужно для карточки. */
+  function probe(title, text, expectCheck) {
+    var box = el('div', 'card');
+    box.appendChild(el('div', 'ttl', title));
+
+    var ext, r, res, ST, info;
+    try {
+      ext = makeExt();
+      r = build(ext, text);
+    } catch (e) {
+      box.className = 'card bad';
+      box.appendChild(el('div', 'expect', 'Исключение при сборке'));
+      box.appendChild(el('pre', null, e && e.message ? e.message : String(e)));
+      return { box: box, ok: false, reason: 'исключение сборки' };
+    }
+
+    box.appendChild(el('pre', null, text));
+
+    if (!r.ok) {
+      box.className = 'card bad';
+      box.appendChild(el('div', 'expect', 'Сборка не удалась'));
+      box.appendChild(el('pre', null, (r.errors || []).join('\n')));
+      return { box: box, ok: false, reason: 'сборка' };
+    }
+
+    /* Что ассемблер положил на самом деле */
+    if (r.listing && r.listing.length) {
+      var tbl = el('table');
+      var hr = el('tr');
+      ['Адрес', 'Запись', 'Код'].forEach(function (h) {
+        hr.appendChild(el('th', null, h));
+      });
+      tbl.appendChild(hr);
+      r.listing.forEach(function (row) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, show(row.addr)));
+        tr.appendChild(el('td', null, row.text || ''));
+        tr.appendChild(el('td', null, row.code || ''));
+        tbl.appendChild(tr);
+      });
+      box.appendChild(tbl);
+    } else {
+      box.appendChild(el('div', 'kv', 'Листинг не отдан (нет r.listing)'));
+    }
+
+    try {
+      ext.core.setProgram(r.program, false);
+      res = ext.run(20000);
+      ST = ext.ST;
+    } catch (e) {
+      box.className = 'card bad';
+      box.appendChild(el('div', 'expect', 'Исключение при прогоне'));
+      box.appendChild(el('pre', null, e && e.message ? e.message : String(e)));
+      return { box: box, ok: false, reason: 'прогон' };
+    }
+
+    info = el('div', 'kv');
+    info.innerHTML =
+      'Статус: <b>' + show(res && res.result) + '</b> · ' +
+      'Шагов: <b>' + show(res && res.steps) + '</b> · ' +
+      'err: <b>' + show(res && res.err) + '</b><br>' +
+      'X = <b>' + show(ST.X) + '</b> · Y = <b>' + show(ST.Y) + '</b>';
+    box.appendChild(info);
+
+    var regs = [];
+    for (var i = 0; i < 10; i++) {
+      regs.push('R' + i + '=' + show(regOfBank(ext, 0, i)));
+    }
+    box.appendChild(el('div', 'kv', regs.join(' · ')));
+
+    box.appendChild(el('div', 'kv', 'Память: ' + dumpProg(ext, 30)));
+    box.appendChild(el('div', 'kv', 'Адреса С/П: ' + (findAll(ext, 60).join(', ') || '—')));
+
+    var r9 = regOfBank(ext, 0, 9);
+    var verdict = expectCheck ? expectCheck(r9, res, ST) : null;
+
+    if (verdict) {
+      var tag = el('span', 'tag ' + (verdict.ok ? 'ok' : 'bad'),
+        verdict.ok ? '✅ ' + verdict.text : '❌ ' + verdict.text);
+      box.querySelector('.ttl').appendChild(tag);
+      box.className = 'card ' + (verdict.ok ? 'ok' : 'bad');
+    }
+
+    return { box: box, ok: verdict ? verdict.ok : false, r9: r9, res: res, ST: ST };
+  }
+
+  /* ---------- Часть 1 ---------- */
+
+  var bpResults = [];
+
+  bpResults.push(probe('1. БП прыгает мимо 222', [
+    '1', '1', '1', 'X→П 9',
+    'БП DONE',
+    '2', '2', '2',
+    'DONE: П→X 9',
+    'С/П'
+  ].join('\n'), function (r9) {
+    return {
+      ok: r9 === 111,
+      text: 'R9 = ' + show(r9) + ' (надо 111)'
+    };
+  }));
+
+  bpResults.push(probe('2. БП не прыгает (без метки на 222)', [
+    '1', '1', '1', 'X→П 9',
+    '2', '2', '2',
+    'П→X 9',
+    'С/П'
+  ].join('\n'), function (r9) {
+    return {
+      ok: r9 === 222,
+      text: 'R9 = ' + show(r9) + ' (надо 222 — базовая запись работает)'
+    };
+  }));
+
+  bpResults.push(probe('3. Подпрограмма ПП', [
+    '5',
+    'ПП SUB',
+    'С/П',
+    'SUB: 7',
+    'В/О'
+  ].join('\n'), function (r9, res, ST) {
+    return {
+      ok: Math.abs(ST.X - 7) < 1e-9 && res.result === 'stop',
+      text: 'X = ' + show(ST.X) + ' (надо 7), статус ' + show(res.result)
+    };
+  }));
+
+  /* ---------- Часть 2 ---------- */
+
+  function cond(condName, xLines, xText, expectJump) {
+    var lines = ['1', '1', '1', 'X→П 9'];
+    xLines.forEach(function (l) { lines.push(l); });
+    lines.push('F ' + condName + ' NEXT');
+    lines.push('1'); lines.push('1'); lines.push('1');
+    lines.push('БП DONE');
+    lines.push('NEXT: 2'); lines.push('2'); lines.push('2');
+    lines.push('DONE: П→X 9');
+    lines.push('С/П');
+
+    var title = condName + ' при X = ' + xText;
+    var wantJump = expectJump === true;
+    var r = probe(title, lines.join('\n'), function (r9) {
+      var jumped = (r9 === 222);
+      var ok = (r9 === 111 || r9 === 222) && jumped === wantJump;
+      return {
+        ok: ok,
+        text: 'R9 = ' + show(r9) + ' · переход ' +
+              (r9 === 222 ? 'СРАБОТАЛ' : r9 === 111 ? 'НЕ сработал' : 'не определён') +
+              ' · ожидалось ' + (wantJump ? 'сработает' : 'не сработает')
+      };
+    });
+    condBox.appendChild(r.box);
+    return r;
+  }
+
+  var condResults = [];
+  condResults.push(cond('X=0', ['0'], '0', true));
+  condResults.push(cond('X=0', ['5'], '5', false));
+  condResults.push(cond('X≠0', ['5'], '5', true));
+  condResults.push(cond('X≠0', ['0'], '0', false));
+  condResults.push(cond('X<0', ['3', '/-/'], '−3', true));
+  condResults.push(cond('X<0', ['5'], '5', false));
+  condResults.push(cond('X≥0', ['5'], '5', true));
+  condResults.push(cond('X≥0', ['3', '/-/'], '−3', false));
+
+  /* ---------- сборка страницы ---------- */
+
+  bpResults.forEach(function (r) { bpBox.appendChild(r.box); });
+
+  var okAll = 0, badAll = 0;
+  var cnt = 0;
+  bpResults.concat(condResults).forEach(function (r) {
+    cnt++;
+    if (r.ok) okAll++; else badAll++;
+  });
+  sumEl.textContent = okAll + ' из ' + cnt + ' сошлось' + (badAll ? ' · ' + badAll + ' нет' : '');
+  sumEl.className = 'sum ' + (badAll ? 'bad' : 'ok');
+
+  var tbl = el('table');
+  var hr = el('tr');
+  ['Проверка', 'R9', 'Статус', 'Шагов'].forEach(function (h) {
+    hr.appendChild(el('th', null, h));
+  });
+  tbl.appendChild(hr);
+
+  var names = [
+    'БП мимо 222', 'запись 222 без БП', 'подпрограмма ПП',
+    'X=0 при 0', 'X=0 при 5',
+    'X≠0 при 5', 'X≠0 при 0',
+    'X<0 при −3', 'X<0 при 5',
+    'X≥0 при 5', 'X≥0 при −3'
+  ];
+
+  bpResults.concat(condResults).forEach(function (r, i) {
+    var tr = el('tr');
+    tr.appendChild(el('td', null, names[i] || ('#' + (i + 1))));
+    tr.appendChild(el('td', null, show(r.r9)));
+    tr.appendChild(el('td', null, r.res ? show(r.res.result) : '—'));
+    tr.appendChild(el('td', null, r.res ? show(r.res.steps) : '—'));
+    tbl.appendChild(tr);
+  });
+  totalEl.appendChild(tbl);
+})();
+</script>
+</body>
+</html>
