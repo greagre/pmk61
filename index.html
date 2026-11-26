@@ -115,13 +115,11 @@
     <div class="shelf-tools">
       <button type="button" id="shelfSave">＋ Сохранить текущую</button>
       <button type="button" id="shelfExport">⇩ В файл</button>
-      <!-- 26.11.2026 (v14): кнопка «⇧ Из файла» снята с панели по просьбе.
-           Код оставлен — вернуть = раскавычить эти три строки.
-           shelf.js при этом не меняется: ui.imp / ui.file станут null,
-           а init() их уже проверяет через if.
+      <!-- 26.11.2026 (v15): кнопка «⇧ Из файла» возвращена в общую панель.
+           Импорт живёт в shelf.js (importLib), там ничего не менялось.
+           ui.imp / ui.file находятся по этим id, иначе init() их пропускает. -->
       <button type="button" id="shelfImport">⇧ Из файла</button>
       <input type="file" id="shelfFile" accept=".json,application/json" hidden>
-      -->
     </div>
     <div class="shelf-list" id="shelfList"></div>
   </div>
@@ -181,13 +179,12 @@
      декодер и обработчик кликов по регистрам.
 
      ВЕРСИИ ЭТОЙ ПРАВКИ (26.11.2026):
-       asm-editor 14 — из панели ассемблера убрана кнопка загрузки файла:
-                     ей там не место, просили в общую панель. Кнопка
-                     «⇧ Из файла» в «Библиотеке» тоже снята с показа,
-                     но её разметка оставлена в HTML комментарием, чтобы
-                     вернуть одной раскавычкой. shelf.js не тронут:
-                     ui.imp / ui.file просто станут null, а init() их
-                     проверяет через if;
+       shelf.js   3 — в общей панели «Библиотеки» снова три кнопки:
+                     сохранить текущую, в файл, из файла. Разметка
+                     #shelfImport / #shelfFile раскрыта, импорт —
+                     прежний importLib, ничего не переписано;
+       asm-editor 14 — кнопки загрузки файла в панели ассемблера нет:
+                     ей там не место. Функции импорта в файле живы;
        ui.js      4 — листинг склеивает двухбайтные команды расширения;
        ext61.js  12 — правило раскладки длинной ленты по страницам;
        asm61.js   5 — директива «.page N» и метки с номером страницы. -->
@@ -199,7 +196,7 @@
 <script src="profiles-ui.js?v=3"></script>
 <script src="ext61-boot.js?v=10"></script>
 <script src="ui.js?v=4"></script>
-<script src="shelf.js?v=2"></script>
+<script src="shelf.js?v=3"></script>
 <script src="ext61-ui.js?v=10"></script>
 <script src="ext61-regs-click.js?v=4"></script>
 <script src="asm61.js?v=5"></script>
