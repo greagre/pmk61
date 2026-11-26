@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверки для книги · pmk61</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px; background: #f2efe6; color: #24211c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #6b655a; margin-bottom: 14px; line-height: 1.4; }
+  .card { background: #fffdf6; border: 1px solid #ddd6c4; border-radius: 10px;
+          padding: 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 15px; margin: 0 0 8px; }
+  .card .q { font-size: 13px; color: #6b655a; margin-bottom: 8px; }
+  pre { background: #e8e3d5; padding: 8px 10px; border-radius: 6px;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        font-size: 13px; margin: 0 0 8px; white-space: pre-wrap; }
+  .row { font-size: 14px; margin: 4px 0; }
+  .row b { font-weight: 600; }
+  .ok { color: #1b5e20; font-weight: 600; }
+  .no { color: #8e1b1b; font-weight: 600; }
+  .note { color: #6b655a; font-weight: 400; }
+  .big { display: inline-block; background: #e8e3d5; padding: 2px 8px;
+         border-radius: 5px; font-family: ui-monospace, Menlo, monospace;
+         font-size: 15px; font-weight: 700; }
+  .hint { font-size: 12px; color: #6b655a; margin-top: 6px; font-style: italic; }
+</style>
+</head>
+<body>
+<h1>Пять проверок для книги</h1>
+<div class="sub">
+  Каждая карточка: текст программы, сборка настоящим ассемблером, прогон на настоящем ядре
+  и <b>фактический результат</b>. Ничего не «проверяется на глаз» — числа настоящие.<br>
+  Пришли мне то, что видишь — впишу в главы 5 и 6.
+</div>
+<div id="out"></div>
+
+<script src="core.js?v=14"></script>
+<script src="profiles.js?v=14"></script>
+<script src="ext61.js?v=11"></script>
+<script src="asm61.js?v=5"></script>
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var PAGE_SIZE = 105, PAGES = 4, LEN = PAGE_SIZE * PAGES;
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+
+  function card(num, title, question, src) {
+    var c = el('div', 'card');
+    c.appendChild(el('h2', null, num + '. ' + title));
+    if (question) c.appendChild(el('div', 'q', question));
+    if (src) c.appendChild(el('pre', null, src));
+    out.appendChild(c);
+    return c;
+  }
+
+  function makeExt() {
+    return MKExt61.create({
+      progLen: PAGE_SIZE, regCount: 15,
+      addrHigh: true, addrHighFirst: 100, addrHighLast: 104
+    });
+  }
+
+  function build(ext, text) {
+    return MKAsm.assemble(text, {
+      model: 'mk-61', pageSize: PAGE_SIZE, pages: PAGES, maxCells: LEN
+    });
+  }
+
+  function show(v) {
+    if (typeof v !== 'number') return String(v);
+    if (!isFinite(v)) return String(v);
+    return String(Math.round(v * 1e8) / 1e8);
+  }
+
+  /* Собрать + прогнать. Возвращает {ok, err, x, y, r0, steps, result, prog} */
+  function execute(text) {
+    var ext = makeExt();
+    var r = build(ext, text);
+    if (!r.ok) {
+      return { ok: false, err: r.errors.map(function (e) {
+        return 'строка ' + e.line + ': ' + e.msg;
+      }).join('; ') };
+    }
+    ext.core.reset(false);
+    ext.core.setProgram(r.cells, false);
+    var res = ext.run(20000);
+    return {
+      ok: true, err: res.err || null, steps: res.steps, result: res.result,
+      x: ext.ST.X, y: ext.ST.Y, r0: ext.ST.R ? ext.ST.R[0] : null
+    };
+  }
+
+  function report(c, r, lines) {
+    if (!r.ok) {
+      c.appendChild(el('div', 'row no', '❌ сборка не удалась: ' + r.err));
+      return r;
+    }
+    if (r.err) {
+      c.appendChild(el('div', 'row no', '❌ ЕГГ0Г на шаге ' + r.steps));
+      return r;
+    }
+    if (lines) lines.forEach(function (ln) { c.appendChild(ln); });
+    return r;
+  }
+
+  function kv(name, value, extra) {
+    var d = el('div', 'row');
+    d.appendChild(el('b', null, name + ': '));
+    var s = el('span', 'big', show(value));
+    d.appendChild(s);
+    if (extra) {
+      d.appendChild(el('span', 'note', '  ' + extra));
+    }
+    return d;
+  }
+
+  function verdict(c, text, cls) {
+    var d = el('div', 'row');
+    d.appendChild(el('b', null, 'Вывод: '));
+    d.appendChild(el('span', cls || 'ok', text));
+    c.appendChild(d);
+  }
+
+  /* ---------------- 1. Порядок X^Y ---------------- */
+
+  (function () {
+    var src = '2\nВ↑\n3\nX^Y\nС/П';
+    var c = card(1, 'Порядок X^Y',
+      'Считается «2 в степени 3» или «3 в степени 2»?', src);
+    var r = execute(src);
+    if (r.ok && !r.err) {
+      var v = r.x;
+      var is8 = Math.abs(v - 8) < 1e-9;
+      var is9 = Math.abs(v - 9) < 1e-9;
+      report(c, r, [kv('X', v)]);
+      if (is8) verdict(c, 'Y в степени X — это 2³ = 8. Значит X^Y = Y^X.');
+      else if (is9) verdict(c, 'X в степени Y — это 3² = 9. Значит X^Y = X^Y.');
+      else verdict(c, 'Ни 8, ни 9 — что-то третье, надо смотреть отдельно.', 'no');
+    } else { report(c, r); }
+
+    /* второй случай: 3 и 2 — чтобы точно понять */
+    var src2 = '3\nВ↑\n2\nX^Y\nС/П';
+    var d2 = el('div', 'q', 'Контрольный прогон: 3, В↑, 2, X^Y — если 9 → Y^X, если 8 → X^Y');
+    c.appendChild(d2);
+    var r2 = execute(src2);
+    if (r2.ok && !r2.err) c.appendChild(kv('X (контроль)', r2.x));
+    else report(c, r2);
+    c.appendChild(el('div', 'hint',
+      'Заполни: в главе 5, пункт 5.13, надо написать точный порядок и переписать пример сложного процента.'));
+  })();
+
+  /* ---------------- 2. Тригонометрия ---------------- */
+
+  (function () {
+    var src = '30\nSIN\nС/П';
+    var c = card(2, 'SIN — градусы или радианы?',
+      'sin 30° = 0,5. Если в радианах, получится −0,988…', src);
+    var r = execute(src);
+    if (r.ok && !r.err) {
+      var v = r.x;
+      var deg = Math.abs(v - 0.5) < 1e-6;
+      var rad = Math.abs(v - Math.sin(30)) < 1e-6;
+      report(c, r, [kv('X', v)]);
+      if (deg) verdict(c, 'Градусы: sin(30°) = 0,5.');
+      else if (rad) verdict(c, 'Радианы: sin(30 рад) ≈ −0,988. В книге все примеры надо давать в радианах.', 'no');
+      else verdict(c, 'Ни то, ни другое — смотреть формат ядра.', 'no');
+    } else { report(c, r); }
+
+    var c2 = el('div', 'q', 'Контроль: 90, SIN — если 1, то точно градусы');
+    c.appendChild(c2);
+    var r2 = execute('90\nSIN\nС/П');
+    if (r2.ok && !r2.err) c.appendChild(kv('X (90°)', r2.x));
+    else report(c, r2);
+
+    var c3 = el('div', 'q', 'И заодно: 45, TG');
+    c.appendChild(c3);
+    var r3 = execute('45\nTG\nС/П');
+    if (r3.ok && !r3.err) c.appendChild(kv('X (tg 45°)', r3.x));
+    else report(c, r3);
+
+    c.appendChild(el('div', 'hint',
+      'Заполни: в главе 5, 5.16, пункт про угловую меру.'));
+  })();
+
+  /* ---------------- 3. Дроби в ассемблере ---------------- */
+
+  (function () {
+    var c = card(3, 'Как писать дробь в ассемблере?',
+      'Три варианта записи одного числа 2,5. Смотрим, какой соберётся и что получится.', null);
+
+    var variants = [
+      { name: 'Точкой: «2.5»', src: '2.5\nС/П' },
+      { name: 'Запятой: «2,5»', src: '2,5\nС/П' },
+      { name: 'Через точку-команду: «2», «.», «5»', src: '2\n.\n5\nС/П' }
+    ];
+
+    variants.forEach(function (v) {
+      c.appendChild(el('div', 'row').appendChild(el('b', null, v.name)));
+      c.appendChild(el('pre', null, v.src));
+      var r = execute(v.src);
+      if (!r.ok) {
+        c.appendChild(el('div', 'row no', '❌ сборка не удалась: ' + r.err));
+        return;
+      }
+      if (r.err) {
+        c.appendChild(el('div', 'row no', '❌ ЕГГ0Г'));
+        return;
+      }
+      c.appendChild(kv('X', r.x));
+    });
+
+    c.appendChild(el('div', 'hint',
+      'Заполни: во всех программах книги дробные числа записывать именно тем способом, который собирается.'));
+  })();
+
+  /* ---------------- 4. Стек возврата ПП ---------------- */
+
+  (function () {
+    var c = card(4, 'Сколько уровней вложенности держит ПП?',
+      'Настоящий МК-61 — 5 уровней. Проверяем вложенные вызовы.', null);
+
+    /* Строим вложенность: главная программа вызывает ПП, та — ПП, и так до N.
+       Каждая подпрограмма: сразу ПП на следующую; последняя кладёт 7 и делает В/О.
+       Возврат: В/О возвращает на адрес после ПП, там тоже В/О.
+       Здесь проще: каждая подпрограмма — «ПП next; В/О», последняя — «7; В/О». */
+
+    function nested(n) {
+      var lines = [];
+      /* Собираем вручную без меток: считаем ячейки.
+         Проще — через метки, но переход на метку считается в ассемблере. */
+      var labels = [];
+      var i;
+      /* главная: ПП l1 ; С/П */
+      lines.push('ПП l1');
+      lines.push('С/П');
+      for (i = 1; i < n; i++) {
+        lines.push('l' + i + ':');
+        lines.push('ПП l' + (i + 1));
+        lines.push('В/О');
+      }
+      lines.push('l' + n + ':');
+      lines.push('7');
+      lines.push('В/О');
+      return lines.join('\n');
+    }
+
+    [1, 3, 5, 6, 7].forEach(function (n) {
+      c.appendChild(el('div', 'row').appendChild(el('b', null, 'Вложенность ' + n)));
+      var src = nested(n);
+      var r = execute(src);
+      if (!r.ok) {
+        c.appendChild(el('div', 'row no', '❌ сборка: ' + r.err));
+        return;
+      }
+      if (r.err) {
+        c.appendChild(el('div', 'row no', '❌ ЕГГ0Г на шаге ' + r.steps +
+          ' (не дошло до конца — возможно, стек возврата переполнен)'));
+        return;
+      }
+      var okv = Math.abs(r.x - 7) < 1e-9;
+      c.appendChild(kv('X', r.x, okv ? '✅ дошло до 7 и вернулось' : '❌ ожидалось 7'));
+      c.appendChild(el('div', 'note',
+        'шагов: ' + r.steps + ', финал: ' + r.result));
+    });
+
+    c.appendChild(el('div', 'hint',
+      'Заполни: в главе 6, 6.6, пункт про стек возврата. Если 6 уже не проходит — у нас 5 уровней, как у настоящего.'));
+  })();
+
+  /* ---------------- 5. F L0 / L1 / L2 / L3 ---------------- */
+
+  (function () {
+    var c = card(5, 'Команды F L0, F L1, F L2, F L3',
+      'Есть ли все четыре цикла или только L0?', null);
+
+    var tests = [
+      { name: 'F L0', src: '5\nX→П 0\n0\nX→П 1\nloop: П→X 1\n1\n+\nX→П 1\nF L0 loop\nП→X 1\nС/П', expect: 5 },
+      { name: 'F L1', src: '5\nX→П 1\n0\nX→П 2\nloop: П→X 2\n1\n+\nX→П 2\nF L1 loop\nП→X 2\nС/П', expect: 5 },
+      { name: 'F L2', src: '5\nX→П 2\n0\nX→П 3\nloop: П→X 3\n1\n+\nX→П 3\nF L2 loop\nП→X 3\nС/П', expect: 5 },
+      { name: 'F L3', src: '5\nX→П 3\n0\nX→П 4\nloop: П→X 4\n1\n+\nX→П 4\nF L3 loop\nП→X 4\nС/П', expect: 5 }
+    ];
+
+    tests.forEach(function (t) {
+      c.appendChild(el('div', 'row').appendChild(el('b', null, t.name)));
+      c.appendChild(el('pre', null, t.src));
+      var r = execute(t.src);
+      if (!r.ok) {
+        c.appendChild(el('div', 'row no', '❌ сборка: ' + r.err));
+        return;
+      }
+      if (r.err) {
+        c.appendChild(el('div', 'row no', '❌ ЕГГ0Г на шаге ' + r.steps));
+        return;
+      }
+      var good = Math.abs(r.x - t.expect) < 1e-9;
+      c.appendChild(kv('X', r.x, good ? '✅ ожидалось ' + t.expect : '❌ ожидалось ' + t.expect));
+      c.appendChild(el('div', 'note', 'шагов: ' + r.steps));
+    });
+
+    c.appendChild(el('div', 'hint',
+      'Заполни: в главе 6, 6.10 и в 6.13. У нас F L1–L3 есть (по asm61.js) — подтвердим прогоном.'));
+  })();
+
+  /* ---------------- 6. Бонус: чем заканчивается «2 / 3 / +» ---------------- */
+
+  (function () {
+    var src = '2\n3\n+\nС/П';
+    var c = card(6, 'Бонус: ловушка из главы 1',
+      'Программа без В↑ — проверяем, действительно ли получается 23.', src);
+    var r = execute(src);
+    if (r.ok && !r.err) {
+      report(c, r, [kv('X', r.x)]);
+      verdict(c, Math.abs(r.x - 23) < 1e-9
+        ? 'Да, 23 — цифры склеиваются. Ловушка в главе 1 описана верно.'
+        : 'Не 23 — значит, ядро различает строки и ведёт себя иначе, надо переписать главу 1.', 
+        Math.abs(r.x - 23) < 1e-9 ? 'ok' : 'no');
+    } else { report(c, r); }
+  })();
+
+  /* ---------------- 7. Бонус: работает ли В↑ как надо ---------------- */
+
+  (function () {
+    var src = '2\nВ↑\n3\n+\nС/П';
+    var c = card(7, 'Бонус: та же задача с В↑',
+      'Должно быть 5.', src);
+    var r = execute(src);
+    if (r.ok && !r.err) {
+      report(c, r, [kv('X', r.x)]);
+      verdict(c, Math.abs(r.x - 5) < 1e-9 ? 'Да, 5. Программа из главы 1 верна.' : 'Не 5 — смотреть ввод.', 
+        Math.abs(r.x - 5) < 1e-9 ? 'ok' : 'no');
+    } else { report(c, r); }
+  })();
+
+})();
+</script>
+</body>
+</html>
