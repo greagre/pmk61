@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трассировка переходов · pmk61</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px; background: #f2efe6; color: #24211c; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; padding-top: 14px;
+       border-top: 2px solid #d8d2c2; }
+  .sub { font-size: 13px; color: #6b655a; margin-bottom: 12px; line-height: 1.45; }
+  .card { background: #fffdf7; border: 1px solid #ddd6c4; border-radius: 10px;
+          padding: 10px 12px; margin: 0 0 12px; }
+  .card.bad { border-color: #d18b8b; }
+  .card.ok { border-color: #7fb884; }
+  .ttl { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 7px;
+         border-radius: 6px; margin-left: 6px; vertical-align: middle; }
+  .tag.ok { background: #d9efdc; color: #1b5e20; }
+  .tag.bad { background: #f7dcdc; color: #8e1b1b; }
+  .tag.warn { background: #fbeecb; color: #7a5300; }
+  pre { background: #efeade; border-radius: 6px; padding: 7px 9px; margin: 6px 0;
+        font-size: 12px; line-height: 1.4; overflow-x: auto; white-space: pre-wrap; }
+  table { border-collapse: collapse; font-size: 12px; margin: 6px 0; width: 100%; }
+  th, td { border: 1px solid #ddd6c4; padding: 3px 6px; text-align: left;
+           font-variant-numeric: tabular-nums; }
+  th { background: #e9e4d5; }
+  tr.jump td { background: #fbeecb; font-weight: 700; }
+  tr.cond td { background: #e4ecf7; }
+  .kv { font-size: 12px; color: #4a463d; margin: 6px 0; line-height: 1.6; }
+  .kv b { color: #24211c; }
+  code { background: #e8e3d5; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Трассировка переходов</h1>
+<div class="sub">
+  Каждая карточка прогоняется <b>по одному шагу</b>, и записывается журнал:
+  номер шага, <code>ip</code> до исполнения, код на этом адресе, X, Y, R9 после.
+  Строки, где <code>ip</code> изменился не на +1, подсвечены жёлтым — это прыжки.
+  Строки с командой условия — синим.
+  <br>Файлы: core.js, ext61.js, asm61.js, asm-editor.js.
+</div>
+<div id="out"></div>
+
+<script src="core.js?v=14"></script>
+<script src="ext61.js?v=11"></script>
+<script src="asm61.js?v=5"></script>
+<script src="asm-editor.js?v=6"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PAGE_SIZE = 105;
+  var PAGES = 4;
+  var LEN = PAGE_SIZE * PAGES;
+  var MAX_STEPS = 200;
+
+  var out = document.getElementById('out');
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function show(v) {
+    if (v === undefined || v === null) return '—';
+    if (typeof v !== 'number') return String(v);
+    if (!isFinite(v)) return String(v);
+    return String(Math.round(v * 1e8) / 1e8);
+  }
+
+  function hex2(v) {
+    if (v === undefined || v === null) return '??';
+    var s = (v & 0xFF).toString(16).toUpperCase();
+    return s.length < 2 ? '0' + s : s;
+  }
+
+  function makeExt() {
+    return MKExt61.create({
+      progLen: PAGE_SIZE,
+      regCount: 15,
+      addrHigh: true,
+      addrHighFirst: 100,
+      addrHighLast: 104
+    });
+  }
+
+  function regOfBank(ext, bankIdx, reg) {
+    var was = ext.bank();
+    ext.selectBank(bankIdx);
+    var v = ext.ST.R[reg];
+    ext.selectBank(was);
+    return v;
+  }
+
+  /* Один шаг ядра. Возвращает, удалось ли продвинуться. */
+  function stepOnce(ext) {
+    var before = ext.ST;
+    var ipBefore = before.ip;
+
+    if (typeof ext.step === 'function') {
+      ext.step();
+    } else if (ext.core && typeof ext.core.step === 'function') {
+      ext.core.step();
+    } else if (ext.core && typeof ext.core.execute === 'function') {
+      ext.core.execute(1);
+    } else {
+      /* последний вариант: короткий run с лимитом в один шаг */
+      ext.run(1);
+    }
+    var ipAfter = ext.ST.ip;
+    return { moved: ipAfter !== ipBefore, ipBefore: ipBefore, ipAfter: ipAfter };
+  }
+
+  /* Главная функция: собрать, прогнать по шагам, вернуть журнал. */
+  function trace(title, text) {
+    var box = el('div', 'card');
+    box.appendChild(el('div', 'ttl', title));
+
+    var ext, r;
+    try {
+      ext = makeExt();
+      r = MKAsmEditor.buildProgram(text, {
+        core: ext.core,
+        len: LEN,
+        pageSize: PAGE_SIZE,
+        pages: PAGES
+      });
+    } catch (e) {
+      box.className = 'card bad';
+      box.appendChild(el('pre', null, 'Исключение при сборке: ' + (e && e.message ? e.message : String(e))));
+      return { box: box };
+    }
+
+    box.appendChild(el('pre', null, text));
+
+    if (!r.ok) {
+      box.className = 'card bad';
+      box.appendChild(el('div', 'kv', 'Сборка не удалась:'));
+      box.appendChild(el('pre', null, (r.errors || []).join('\n')));
+      return { box: box };
+    }
+
+    /* листинг */
+    if (r.listing && r.listing.length) {
+      var t = el('table');
+      var hr = el('tr');
+      ['Адрес', 'Запись', 'Код'].forEach(function (h) { hr.appendChild(el('th', null, h)); });
+      t.appendChild(hr);
+      r.listing.forEach(function (row) {
+        var tr = el('tr');
+        tr.appendChild(el('td', null, show(row.addr)));
+        tr.appendChild(el('td', null, row.text || ''));
+        tr.appendChild(el('td', null, row.code || ''));
+        t.appendChild(tr);
+      });
+      box.appendChild(t);
+    }
+
+    try {
+      ext.core.setProgram(r.program, false);
+      /* сброс счётчика/указателя, как делает setProgram при полном reset */
+      if (typeof ext.homePage === 'function') ext.homePage();
+    } catch (e) {
+      box.className = 'card bad';
+      box.appendChild(el('pre', null, 'Ошибка загрузки программы: ' + (e && e.message ? e.message : String(e))));
+      return { box: box };
+    }
+
+    /* дамп памяти */
+    var prog = ext.ST.prog;
+    var dump = [];
+    for (var i = 0; i < 30; i++) dump.push(hex2(prog[i]));
+    box.appendChild(el('div', 'kv', 'Память: ' + dump.join(' ')));
+
+    /* пошаговый журнал */
+    var rows = [];
+    var stopped = false;
+    var err = null;
+    var steps = 0;
+
+    for (var s = 0; s < MAX_STEPS; s++) {
+      var ipB = ext.ST.ip;
+      var codeB = prog[ipB];
+      var xB = ext.ST.X;
+      var yB = ext.ST.Y;
+      var r9B = regOfBank(ext, 0, 9);
+
+      var moved;
+      try {
+        moved = stepOnce(ext);
+      } catch (e) {
+        err = e && e.message ? e.message : String(e);
+        break;
+      }
+      steps++;
+
+      var ipA = ext.ST.ip;
+      rows.push({
+        n: steps,
+        ip: ipB,
+        code: codeB,
+        xBefore: xB,
+        yBefore: yB,
+        r9Before: r9B,
+        xAfter: ext.ST.X,
+        yAfter: ext.ST.Y,
+        r9After: regOfBank(ext, 0, 9),
+        ipAfter: ipA,
+        halted: typeof ext.ST.halted === 'boolean' ? ext.ST.halted : null
+      });
+
+      if (ext.ST.halted === true) { stopped = true; break; }
+      if (ext.ST.err === true) { stopped = true; break; }
+      if (!moved.moved && ipA === ipB) { stopped = true; break; }
+    }
+
+    /* таблица журнала */
+    var jt = el('table');
+    var jh = el('tr');
+    ['Шаг', 'ip', 'Код', 'X до', 'Y до', 'R9 до', 'X после', 'Y после', 'R9 после', 'ip после'].forEach(function (h) {
+      jh.appendChild(el('th', null, h));
+    });
+    jt.appendChild(jh);
+
+    var COND = { 0x57: 1, 0x59: 1, 0x5C: 1, 0x5E: 1, 0x5D: 1, 0x5B: 1, 0x58: 1, 0x5A: 1 };
+    var JUMP = { 0x51: 1, 0x52: 1, 0x53: 1 };
+
+    rows.forEach(function (row) {
+      var tr = el('tr');
+      var isJump = row.ipAfter !== row.ip + 1;
+      var isCond = COND[row.code] === 1;
+      if (isJump) tr.className = 'jump';
+      else if (isCond) tr.className = 'cond';
+
+      tr.appendChild(el('td', null, String(row.n)));
+      tr.appendChild(el('td', null, String(row.ip)));
+      tr.appendChild(el('td', null, hex2(row.code)));
+      tr.appendChild(el('td', null, show(row.xBefore)));
+      tr.appendChild(el('td', null, show(row.yBefore)));
+      tr.appendChild(el('td', null, show(row.r9Before)));
+      tr.appendChild(el('td', null, show(row.xAfter)));
+      tr.appendChild(el('td', null, show(row.yAfter)));
+      tr.appendChild(el('td', null, show(row.r9After)));
+      tr.appendChild(el('td', null, String(row.ipAfter)));
+      jt.appendChild(tr);
+    });
+
+    box.appendChild(el('div', 'kv', 'Журнал (' + steps + ' шагов' + (stopped ? ', останов' : ', достигнут лимит') + (err ? ', ошибка: ' + err : '') + '):'));
+    box.appendChild(jt);
+
+    /* readAddr-диагностика для всех условных/переходных команд в памяти */
+    var ra = [];
+    for (var k = 0; k < 30; k++) {
+      var c = prog[k];
+      if (COND[c] === 1 || JUMP[c] === 1) {
+        var hi = prog[k + 1] & 0x0F;
+        var lo = prog[k + 2] & 0x0F;
+        ra.push('адрес ' + k + ': код ' + hex2(c) +
+                ' → байты ' + hex2(prog[k + 1]) + ' ' + hex2(prog[k + 2]) +
+                ' → hi*10+lo = ' + (hi * 10 + lo) +
+                ' · lo*10+hi = ' + (lo * 10 + hi));
+      }
+    }
+    if (ra.length) {
+      box.appendChild(el('div', 'kv', 'Чтение адреса (оба порядка):'));
+      box.appendChild(el('pre', null, ra.join('\n')));
+    }
+
+    /* итог */
+    var last = rows.length ? rows[rows.length - 1] : null;
+    var verdict = el('div', 'kv');
+    verdict.innerHTML = 'Итог: X = <b>' + show(ext.ST.X) + '</b> · Y = <b>' + show(ext.ST.Y) +
+      '</b> · R9 = <b>' + show(regOfBank(ext, 0, 9)) + '</b> · шагов <b>' + steps +
+      '</b> · halted: <b>' + show(ext.ST.halted) + '</b>';
+    box.appendChild(verdict);
+
+    return { box: box, rows: rows, r9: regOfBank(ext, 0, 9), X: ext.ST.X, steps: steps };
+  }
+
+  function section(title) {
+    var h = el('h2', null, title);
+    out.appendChild(h);
+  }
+
+  /* ---------- Карточка 1: работает ли цифра 0 ---------- */
+  section('1. Работает ли цифра 0 (код 00)');
+
+  var c1 = trace('7 → 0 → R9: ноль должен затереть семёрку', [
+    '7',
+    '0',
+    'X→П 9',
+    'П→X 9',
+    'С/П'
+  ].join('\n'));
+  out.appendChild(c1.box);
+
+  var tag1;
+  if (c1.r9 === 0) {
+    tag1 = el('span', 'tag ok', '✅ ноль вводится');
+  } else if (c1.r9 === 7) {
+    tag1 = el('span', 'tag bad', '❌ ноль НЕ вводится (код 00 не исполняется)');
+  } else {
+    tag1 = el('span', 'tag warn', '⚠ неожиданно: R9 = ' + show(c1.r9));
+  }
+  c1.box.querySelector('.ttl').appendChild(tag1);
+
+  /* ---------- Карточка 2: F X≠0 при X = 5 ---------- */
+  section('2. F X≠0 при X = 5 — должен прыгнуть');
+
+  var c2 = trace('F X≠0 NEXT при X = 5', [
+    '1', '1', '1',
+    'X→П 9',
+    '5',
+    'F X≠0 NEXT',
+    '1', '1', '1',
+    'БП DONE',
+    'NEXT: 2', '2', '2',
+    'DONE: П→X 9',
+    'С/П'
+  ].join('\n'));
+  out.appendChild(c2.box);
+
+  var tag2;
+  if (c2.r9 === 222) {
+    tag2 = el('span', 'tag ok', '✅ переход сработал');
+  } else if (c2.r9 === 111) {
+    tag2 = el('span', 'tag bad', '❌ переход НЕ сработал');
+  } else {
+    tag2 = el('span', 'tag warn', '⚠ R9 = ' + show(c2.r9));
+  }
+  c2.box.querySelector('.ttl').appendChild(tag2);
+
+  /* ---------- Карточка 3: F X<0 при X = −3 ---------- */
+  section('3. F X<0 при X = −3 — должен прыгнуть');
+
+  var c3 = trace('F X<0 NEXT при X = −3', [
+    '1', '1', '1',
+    'X→П 9',
+    '3',
+    '/-/',
+    'F X<0 NEXT',
+    '1', '1', '1',
+    'БП DONE',
+    'NEXT: 2', '2', '2',
+    'DONE: П→X 9',
+    'С/П'
+  ].join('\n'));
+  out.appendChild(c3.box);
+
+  var tag3;
+  if (c3.r9 === 222) {
+    tag3 = el('span', 'tag ok', '✅ переход сработал');
+  } else if (c3.r9 === 111) {
+    tag3 = el('span', 'tag bad', '❌ переход НЕ сработал');
+  } else {
+    tag3 = el('span', 'tag warn', '⚠ R9 = ' + show(c3.r9));
+  }
+  c3.box.querySelector('.ttl').appendChild(tag3);
+
+  /* ---------- Карточка 4: просто F X=0 при X = 0 ---------- */
+  section('4. F X=0 при X = 0 — должен прыгнуть');
+
+  var c4 = trace('F X=0 NEXT при X = 0', [
+    '1', '1', '1',
+    'X→П 9',
+    '0',
+    'F X=0 NEXT',
+    '1', '1', '1',
+    'БП DONE',
+    'NEXT: 2', '2', '2',
+    'DONE: П→X 9',
+    'С/П'
+  ].join('\n'));
+  out.appendChild(c4.box);
+
+  var tag4;
+  if (c4.r9 === 222) {
+    tag4 = el('span', 'tag ok', '✅ переход сработал');
+  } else if (c4.r9 === 111) {
+    tag4 = el('span', 'tag bad', '❌ переход НЕ сработал');
+  } else {
+    tag4 = el('span', 'tag warn', '⚠ R9 = ' + show(c4.r9));
+  }
+  c4.box.querySelector('.ttl').appendChild(tag4);
+
+  /* ---------- Сводка ---------- */
+  section('Сводка');
+  var st = el('table');
+  var sh = el('tr');
+  ['Проверка', 'X', 'R9', 'Шагов', 'Итог'].forEach(function (h) { sh.appendChild(el('th', null, h)); });
+  st.appendChild(sh);
+
+  [
+    ['цифра 0 работает', c1, c1.r9 === 0 ? '✅' : '❌'],
+    ['F X≠0 при 5', c2, c2.r9 === 222 ? '✅' : '❌'],
+    ['F X<0 при −3', c3, c3.r9 === 222 ? '✅' : '❌'],
+    ['F X=0 при 0', c4, c4.r9 === 222 ? '✅' : '❌']
+  ].forEach(function (row) {
+    var tr = el('tr');
+    tr.appendChild(el('td', null, row[0]));
+    tr.appendChild(el('td', null, show(row[1].X)));
+    tr.appendChild(el('td', null, show(row[1].r9)));
+    tr.appendChild(el('td', null, String(row[1].steps)));
+    tr.appendChild(el('td', null, row[2]));
+    st.appendChild(tr);
+  });
+  out.appendChild(st);
+})();
+</script>
+</body>
+</html>
