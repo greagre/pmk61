@@ -164,6 +164,36 @@
    поэтому список библиотеки и импорт-экспорт видят её без изменений.
 
    Чистая часть не тронута, тесты те же — 33.
+
+   ПРАВКА v13 (26.11.2026) — кнопка «Загрузить файл»
+
+   Пользователь: «такой кнопки сохранить в список не было, сделай её —
+   чтобы я мог загрузить файл со своего диска в список».
+
+   Появилась кнопка «Загрузить файл»: одно нажатие → системное окно
+   выбора файла → выбранный .json сразу встаёт в библиотеку списком,
+   под своими именами, с кодами и текстом ассемблера как были.
+
+   Чего кнопка НЕ делает и почему: сама лезть в память телефона
+   и забирать файлы без человека она не может — браузер не имеет доступа
+   к файловой системе, файл всегда выбирает пользователь в системном
+   окне. Это ограничение платформы, а не недоделка. Зато браузер помнит
+   последнюю папку, и в следующий раз окно открывается там же.
+
+   Что принимается во входе (всё это разбирает normalizeImport):
+     • одиночная запись {name, prog, …};
+     • массив записей [{…}, {…}];
+     • обёртка {programs:[…]} или {list:[…]};
+     • коды простыми числами [1,65,97] и парами [[1,65],[97,96]];
+     • запись без кодов, но с текстом asm — тоже.
+   Имя берётся из файла как есть: никаких «· 26.11 03:12» и никакой
+   перезаписи существующих записей — каждая строка добавляется.
+
+   Правило, установленное раньше и здесь соблюдённое: коды в библиотеке
+   лежат простым списком, как до v13, — поэтому выгрузка даёт тот же
+   файл, что и раньше, а toPairs нужен только на входе в память.
+
+   Чистая часть не тронута, тесты те же — 33.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -337,6 +367,115 @@
     };
   }
 
+  /* ---------- разбор импортируемого файла (чистая часть, v13) ---------- */
+
+  /* Простые числа ↔ пары.
+
+     toPairs нужен там, где программа уходит В ПАМЯТЬ: ui.loadProgram ждёт
+     пары [код, адрес]. В библиотеке коды лежат простым списком (так было
+     до v13, так и остаётся), и выгрузка даёт ровно тот же файл.
+
+     toFlat — обратное превращение: если файл пришёл парами, в библиотеку
+     он всё равно ложится простым списком. Так один и тот же файл,
+     выгруженный из программы и взятый с диска, даёт одинаковые записи. */
+  function toPairs(prog) {
+    if (!Array.isArray(prog) || !prog.length) return [];
+    if (Array.isArray(prog[0])) {
+      return prog.map(function (x) { return [(x[0] | 0) & 0xFF, x[1] | 0]; });
+    }
+    var out = [];
+    for (var i = 0; i + 1 < prog.length; i += 2) {
+      out.push([prog[i] & 0xFF, prog[i + 1] | 0]);
+    }
+    return out;
+  }
+
+  function toFlat(prog) {
+    if (!Array.isArray(prog) || !prog.length) return [];
+    if (Array.isArray(prog[0])) {
+      var pairs = [];
+      for (var i = 0; i < prog.length; i++) {
+        var p = prog[i];
+        if (!Array.isArray(p)) continue;
+        pairs.push(p[0] | 0, p[1] | 0);
+      }
+      return pairs;
+    }
+    var out = [];
+    for (var j = 0; j < prog.length; j++) {
+      var v = prog[j];
+      if (typeof v === 'number' && isFinite(v)) out.push(v | 0);
+    }
+    return out;
+  }
+
+  /* Сколько кодов реально в записи — без хвоста НОП. Нужно, чтобы
+     «пустая» запись (один НОП или пустой массив) не считалась программой. */
+  function progSize(prog) {
+    var flat = toFlat(prog);
+    if (!flat.length) return 0;
+    return trimTrailingNop(flat);
+  }
+
+  /* Объект → запись библиотеки или null, если это не запись.
+
+     Понимает оба встречавшихся формата: {name, prog, data, asm}
+     и сокращённый {n, p}. Запись без кодов, но с текстом asm тоже
+     годится: в v13 такая строка появляется в списке и открывается
+     в редакторе. */
+  function normalizeEntry(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+
+    var name = obj.name;
+    if (typeof name !== 'string' || !name.trim()) name = obj.n;
+    if (typeof name !== 'string' || !name.trim()) name = 'Без имени';
+
+    var rawProg = obj.prog;
+    if (!Array.isArray(rawProg)) rawProg = obj.p;
+    var prog = Array.isArray(rawProg) ? toFlat(rawProg) : [];
+
+    var asm = (typeof obj.asm === 'string') ? obj.asm : '';
+    var data = (obj.data && typeof obj.data === 'object' && !Array.isArray(obj.data)) ? obj.data : {};
+
+    if (!prog.length && !asm.trim()) return null;
+
+    var entry = {
+      id: (typeof obj.id === 'string' && obj.id) ? obj.id : '',
+      name: name.trim(),
+      prog: prog,
+      data: data,
+      asm: asm,
+      savedAt: (typeof obj.savedAt === 'number') ? obj.savedAt : 0
+    };
+    return entry;
+  }
+
+  /* Что угодно из JSON.parse → массив записей.
+
+     Принимаем: одиночную запись, массив записей, обёртки {programs:[…]}
+     и {list:[…]}. Мусор внутри просто пропускается, а не роняет импорт
+     целиком: из девяти файлов один битый не должен утаскивать остальные. */
+  function normalizeImport(parsed) {
+    var src = null;
+
+    if (Array.isArray(parsed)) {
+      src = parsed;
+    } else if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.programs)) src = parsed.programs;
+      else if (Array.isArray(parsed.list)) src = parsed.list;
+      else src = [parsed];
+    } else {
+      return [];
+    }
+
+    var out = [];
+    for (var i = 0; i < src.length; i++) {
+      var e = normalizeEntry(src[i]);
+      if (e) out.push(e);
+    }
+    return out;
+  }
+
   /* ---------- примеры ---------- */
 
   /* Первый пример — факториал: он проверяет ассемблер, память, переход
@@ -499,8 +638,18 @@
     } catch (e) { return []; }
   }
 
+  /* v13: возвращает true или текст причины. Прежний пустой catch глотал
+     ошибку, и вызывающий код не мог отличить «сохранено» от «не влезло
+     в память браузера» — импорт врал, что загрузил. */
   function saveLib(arr) {
-    try { localStorage.setItem(LIB_KEY, JSON.stringify(arr)); } catch (e) {}
+    try {
+      localStorage.setItem(LIB_KEY, JSON.stringify(arr));
+      return true;
+    } catch (e) {
+      var m = (e && e.message) ? e.message : String(e);
+      try { console.error('saveLib:', m); } catch (e2) {}
+      return m;
+    }
   }
 
   /* id записи (v12). Формат «p-<время>-<хвост>»: время даёт порядок,
@@ -591,6 +740,126 @@
     return { ok: true, name: name, id: entry.id, isNew: idx < 0 };
   }
 
+  /* ---------- импорт файла с устройства (v13) ---------- */
+
+  /* Записи из файла → библиотека.
+
+     Правило, о котором просил пользователь: «в каком виде было — в таком
+     и появилось в списке». Поэтому:
+       • имя — из файла, без приписок и дат;
+       • коды — в том же простом виде, что и в файле;
+       • ничего не перезаписывается: каждая запись добавляется новой
+         строкой, даже если имя совпало;
+       • id даётся новый, если в файле его не было.
+
+     Возвращает {added, total, error}. */
+  function importEntries(entries) {
+    var arr = loadLib();
+    var added = 0;
+    var total = (entries && entries.length) ? entries.length : 0;
+
+    for (var i = 0; i < total; i++) {
+      var e = entries[i];
+      var entry = {
+        id: e.id || makeId(),
+        name: e.name,
+        prog: e.prog.slice(),
+        data: e.data || {},
+        asm: e.asm || '',
+        savedAt: e.savedAt || Date.now()
+      };
+      arr.push(entry);
+      added++;
+    }
+
+    if (!added) return { added: 0, total: total, error: '' };
+
+    var ok = saveLib(arr);
+    if (ok !== true) {
+      return { added: 0, total: total, error: String(ok) };
+    }
+    return { added: added, total: total, error: '' };
+  }
+
+  /* Окно выбора файла и чтение.
+
+     Как это работает: скрытый input[type=file] открывает СИСТЕМНОЕ окно
+     выбора — файл тыкает человек. Страница получить доступ к папкам сама
+     не может, это запрет браузера, а не недоделка.
+
+     startIn: подсказка браузеру, в какой папке открыть окно. Chromium
+     помнит последний выбор и сам, а подсказка помогает в первый раз. */
+  function askFile() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json,text/plain';
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '-9999px';
+
+    input.addEventListener('change', function () {
+      var file = input.files && input.files[0];
+      if (!file) {
+        try { document.body.removeChild(input); } catch (e) {}
+        return;
+      }
+
+      var reader = new FileReader();
+      reader.onerror = function () {
+        toast('Файл не прочитался: ' + (reader.error && reader.error.message ? reader.error.message : 'неизвестная ошибка'), 'err', 8000);
+        try { document.body.removeChild(input); } catch (e) {}
+      };
+
+      reader.onload = function () {
+        var text = String(reader.result == null ? '' : reader.result);
+        var parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch (e) {
+          toast('«' + file.name + '» — это не JSON: ' +
+            ((e && e.message) ? e.message : 'не разобралось'), 'err', 9000);
+          try { document.body.removeChild(input); } catch (e2) {}
+          return;
+        }
+
+        var entries = normalizeImport(parsed);
+        if (!entries.length) {
+          toast('«' + file.name + '»: программ внутри не нашлось.\n' +
+            'Нужен файл с полями name и prog (или asm).', 'warn', 9000);
+          try { document.body.removeChild(input); } catch (e2) {}
+          return;
+        }
+
+        var r = importEntries(entries);
+        if (r.added === 0) {
+          toast('НЕ записалось: ' + (r.error || 'память браузера не приняла данные') +
+            '\nОсвободи место и повтори.', 'err', 10000);
+          hintText('Импорт не удался — данные в браузере не сохранились.');
+        } else {
+          var names = entries.slice(0, 3).map(function (x) { return x.name; }).join(', ');
+          var more = entries.length > 3 ? ' и ещё ' + (entries.length - 3) : '';
+          toast('Добавлено ' + r.added + ' из ' + r.total +
+            '\n' + names + more, 'ok', 8000);
+          hintText('В список добавлено ' + r.added + ' программ. Открой «Библиотека», чтобы увидеть их. ' +
+            'Память калькулятора не тронута.');
+        }
+
+        /* Перерисовать панель библиотеки, если она открыта: иначе новая
+           строка появится только после перезагрузки страницы. */
+        if (global.MKShelf && typeof global.MKShelf.refresh === 'function') {
+          try { global.MKShelf.refresh(); } catch (e) {}
+        }
+
+        try { document.body.removeChild(input); } catch (e) {}
+      };
+
+      reader.readAsText(file, 'utf-8');
+    });
+
+    document.body.appendChild(input);
+    input.click();
+  }
+
   /* ---------- панель ---------- */
 
   var panel = null;
@@ -620,6 +889,7 @@
       '.asm-row button{padding:8px 12px;border-radius:8px;border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;font-size:13px;-webkit-tap-highlight-color:transparent}',
       '.asm-row button.main{font-weight:600;border-color:rgba(70,140,255,.6)}',
       '.asm-row button.save{border-color:rgba(26,140,74,.6)}',
+      '.asm-row button.load{border-color:rgba(200,140,40,.7)}',
       '.asm-row button:focus:not(:focus-visible){outline:none}',
       '.asm-stat{margin-top:8px;font-size:12px;opacity:.85}',
       '.asm-stat.ok{color:#1a8c4a}',
@@ -936,6 +1206,19 @@
     });
     row.appendChild(bSave);
 
+    /* v13: главная кнопка для просьбы «загрузить файл с диска в список».
+       Одно нажатие → системное окно выбора файла → выбранный json сразу
+       встаёт в библиотеку списком, под своими именами. Память калькулятора
+       при этом не трогается: это именно импорт в список, а не запуск. */
+    var bFile = mk('button', 'load', 'Загрузить файл');
+    bFile.type = 'button';
+    bFile.title = 'Выбрать json-файл на устройстве и добавить его программы в библиотеку';
+    bFile.addEventListener('click', function () {
+      this.blur();
+      askFile();
+    });
+    row.appendChild(bFile);
+
     /* v10: только вставляет текст. Программа попадает в память
        по кнопке «Собрать и загрузить» — иначе та теряет смысл. */
     var bExample = mk('button', null, 'Пример');
@@ -971,10 +1254,12 @@
 
     panel.appendChild(row);
 
-    /* v12: разница между двумя кнопками одной строкой. Раньше это
-       объяснялось в длинной подсказке внизу, где его никто не читает. */
+    /* v12: разница между кнопками одной строкой. Раньше это
+       объяснялось в длинной подсказке внизу, где его никто не читает.
+       v13: сюда же добавлена третья строка про файл. */
     var legend = mk('div', 'asm-tip',
-      '«Загрузить» — в память калькулятора. «Сохранить» — в библиотеку.');
+      '«Загрузить» — в память калькулятора. «Сохранить» — в библиотеку. ' +
+      '«Загрузить файл» — добавить в библиотеку программы из json с устройства.');
     panel.appendChild(legend);
 
     expectEl = mk('div', 'asm-expect');
@@ -1042,6 +1327,15 @@
     loadLib: loadLib,
     saveLib: saveLib,
     insertExample: insertExample,
+    /* v13: импорт файла — чистые функции наружу, чтобы их можно было
+       проверять тестами без браузерного окна выбора. */
+    toPairs: toPairs,
+    toFlat: toFlat,
+    progSize: progSize,
+    normalizeEntry: normalizeEntry,
+    normalizeImport: normalizeImport,
+    importEntries: importEntries,
+    askFile: askFile,
     example: EXAMPLE,
     examples: EXAMPLES,
     NOP: NOP,
