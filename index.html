@@ -38,9 +38,120 @@
 
     <button type="button" class="progtag" id="progTag" hidden>
       <span class="ptag-num" id="progTagNum">01</span>
+      <span class="ptag-name" id="progTagName">n! — факториал</span>
+      <span class="ptag-go">☰</span>
+    </button>
 
+    <div class="keys" id="keys"></div>
+
+    <div class="service" id="service"></div>
+
+    <div class="tempo study-only" id="tempoRow">
+      <span>Темп</span>
+      <select id="tempo" aria-label="Темп автоматического шага">
+        <option value="1">1 с</option>
+        <option value="2" selected>2 с</option>
+        <option value="5">5 с</option>
+        <option value="10">10 с</option>
+        <option value="0">вручную</option>
+      </select>
+    </div>
+
+    <div class="status study-only" id="status"></div>
+
+    <div class="tabs study-only" id="tabs">
+      <button type="button" data-tab="num">Числа</button>
+      <button type="button" data-tab="regs">Регистры</button>
+      <button type="button" data-tab="code">Код</button>
+      <button type="button" data-tab="log">Журнал</button>
+    </div>
+
+    <div class="tabpane study-only" id="tabNum">
+      <div class="stack" id="stack"></div>
+    </div>
+
+    <div class="tabpane regs study-only" id="tabRegs"></div>
+
+    <div class="tabpane study-only" id="tabCode">
+      <div class="prog" id="prog"></div>
+    </div>
+
+    <div class="tabpane study-only" id="tabLog">
+      <div class="logbox">
+        <div class="loghead">
+          <span>Журнал шагов · <b id="logCount">0</b></span>
+          <button type="button" id="logClear">Очистить</button>
+        </div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <div class="hint" id="hint">Готово. Клавиша f открывает второй слой, k — слой К: K-функции и косвенные команды МК-61.</div>
+  </div>
+
+  <div class="modeseg" id="modeseg">
+    <button type="button" data-mode="work">Работа</button>
+    <button type="button" data-mode="study">Учёба</button>
+  </div>
+
+  <div class="foot">
+    <a href="tests.html?v=14">Проверка ядра МК-61</a> ·
+    <a href="tests-banks.html?v=4">Проверка банков и страниц</a> ·
+    <a href="tests-library.html?v=2">Проверка библиотеки</a> ·
+    <a href="tests-ext.html?v=16">Проверка расширения</a> ·
+    <a href="tests-disasm.html?v=12">Проверка декодера</a> ·
+    <a href="tests-asm.html?v=2">Проверка ассемблера</a> ·
+    <a href="tests-editor.html?v=4">Проверка редактора</a> ·
+    <a href="tests-run.html?v=1">Проверка прогонов</a>
   </div>
 </div>
+
+<div class="shelf" id="shelf" hidden>
+  <div class="shelf-card">
+    <div class="shelf-head">
+      <span>Программы</span>
+      <button type="button" id="shelfClose" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="shelf-tools">
+      <button type="button" id="shelfSave">＋ Сохранить текущую</button>
+      <button type="button" id="shelfExport">⇩ В файл</button>
+      <button type="button" id="shelfImport">⇧ Из файла</button>
+      <input type="file" id="shelfFile" accept=".json,application/json" hidden>
+    </div>
+    <div class="shelf-list" id="shelfList"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = 'pmk61/theme';
+  var ORDER = ['classic', 'light', 'dark'];
+  var ICON = { classic: '▤', light: '☀', dark: '☾' };
+  var NAME = { classic: 'классика — бежевый корпус', light: 'светлая', dark: 'тёмная' };
+  var META = { classic: '#d7d3c4', light: '#eef1f6', dark: '#15181b' };
+  var btn = document.getElementById('themeBtn');
+  var meta = document.querySelector('meta[name="theme-color"]');
+
+  function apply(theme) {
+    if (ORDER.indexOf(theme) < 0) theme = 'classic';
+    document.body.dataset.theme = theme;
+    btn.textContent = ICON[theme];
+    btn.title = 'Тема: ' + NAME[theme] + ' — нажми, чтобы сменить';
+    if (meta) meta.setAttribute('content', META[theme]);
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  apply(saved && ORDER.indexOf(saved) >= 0 ? saved : 'classic');
+
+  btn.addEventListener('click', function () {
+    var cur = document.body.dataset.theme || 'classic';
+    var i = ORDER.indexOf(cur);
+    apply(ORDER[(i + 1) % ORDER.length]);
+  });
+})();
+</script>
 
 <!-- ПОРЯДОК ПОДКЛЮЧЕНИЯ ВАЖЕН.
 
@@ -56,24 +167,30 @@
      6. asm61.js → asm-editor.js: ассемблер и панель редактора на вкладке
         «Код». Панель вставляет себя ПЕРЕД #prog и никогда внутрь: там
         renderProgram() из ui.js делает innerHTML = '', и всё вложенное
-        исчезло бы при первой перерисовке. Тот же приём, у панели банков.
+        исчезло бы при первой перерисовке. Тот же приём, что у панели банков.
 
      ВАЖНО: версии у всех скриптов поднимаются ВМЕСТЕ. Если поднять один
      файл и забыть другой, браузер отдаст старый скрипт из кэша — и
-     разъедется всё.
+     разъедется всё: панель банков (живёт в ext61-ui.js и вставляется
+     ПЕРЕД #tabRegs, а не внутрь — иначе её сносит renderRegs из ui.js),
+     декодер и обработчик кликов по регистрам.
 
      ВЕРСИИ ЭТОЙ ПРАВКИ (26.11.2026):
-       shelf.js   6 — импорт файла. Причина, по которой кнопка «ничего не
-                     загружала», была не в коде импорта, а ЗДЕСЬ: стояла
-                     версия ?v=3, браузер отдавал старый shelf.js из кэша,
-                     где importLib молча ничего не находил. Поднято до 6.
-                     В самом shelf.js v5 импорт кладёт каждую запись файла
-                     отдельной строкой, без переименований, и честно пишет
-                     в тосте, сколько добавлено; формат {app,format,
-                     version,programs[]} с prog плоским списком байтов
-                     разбирается как есть;
-       asm-editor 14 — кнопки загрузки файла в панели ассемблера нет:
-                     ей там не место. Функции импорта в файле живы;
+       asm-editor 13 — главная просьба сегодняшнего дня: кнопка
+                     «Загрузить файл». Одно нажатие → системное окно
+                     выбора → выбранный json сразу встаёт в библиотеку
+                     списком, под своими именами, с кодами и текстом
+                     ассемблера как было. Чего она не может: сама лезть
+                     в память телефона — файл всегда выбирает человек
+                     в системном окне, это ограничение браузера.
+                     Принимается: одиночная запись, массив, обёртки
+                     {programs:[…]}/{list:[…]}, коды числами и парами,
+                     запись без кодов но с asm. Имена не меняются,
+                     существующие записи не перезаписываются.
+                     saveLib теперь возвращает причину отказа, а не
+                     глотает ошибку: импорт больше не врёт «загружено»,
+                     когда браузер не принял данные. Чистая часть
+                     (сборка, примеры) не тронута — 33 проверки;
        ui.js      4 — листинг склеивает двухбайтные команды расширения;
        ext61.js  12 — правило раскладки длинной ленты по страницам;
        asm61.js   5 — директива «.page N» и метки с номером страницы. -->
@@ -85,11 +202,11 @@
 <script src="profiles-ui.js?v=3"></script>
 <script src="ext61-boot.js?v=10"></script>
 <script src="ui.js?v=4"></script>
-<script src="shelf.js?v=6"></script>
+<script src="shelf.js?v=2"></script>
 <script src="ext61-ui.js?v=10"></script>
 <script src="ext61-regs-click.js?v=4"></script>
 <script src="asm61.js?v=5"></script>
-<script src="asm-editor.js?v=14"></script>
+<script src="asm-editor.js?v=13"></script>
 
 <script>
 /* Переключатель угла Р-ГРД-Г — как в 34-й:
