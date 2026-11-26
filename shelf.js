@@ -1,19 +1,46 @@
 /* =========================================================
    pmk61 / shelf.js — библиотека программ МК-61
 
-   Перенесено из mk-emulator/shelf.js (эталон 34-й) с правками:
-   • ключи памяти pmk61/library и pmk61/bridge
-   • формат файла: app "pmk61", model "mk-61", имя mk61-programs.json
-   • встроенные примеры оставлены — общие команды линии 34 в 61-й
-     имеют те же коды, поэтому листинги исполняются тем же ядром;
-     достоверность каждой проверяется кнопкой «Проверить»
+   ПРАВКА v5 (26.11.2026) — ИМПОРТ НИЧЕГО НЕ МЕНЯЕТ
 
-   • встроенные примеры, сквозная нумерация 01, 02, 03 …
-   • сохранение текущей программы, загрузка в корпус одним нажатием
-   • проверка: прогон с данными из описания и сверка с эталоном
-   • выгрузка и загрузка .json (единый формат programs[] v2)
-   • мост из языка «МК-Алго» (algo.html → index.html)
+   Была беда: включил файл — а в списке то же, что было. Причина
+   нашлась в importLib, и она была не одна:
 
+   • если имя из файла уже занято, а коды другие, запись молча
+     переименовывалась в «Имя · 26.11 03:12» и уезжала в конец
+     списка. Пользователь ждал своё имя и не находил его;
+   • если коды совпадали, запись перезаписывалась, счётчик added
+     не рос, тост писал «+0 · обновлено 1» — снаружи «не загрузилось»;
+   • saveLib глотал ошибку записи в пустом catch. Память браузера
+     могла не принять библиотеку, а тост всё равно кричал «Загружено».
+   • err в applyProgram. Если память калькулятора не принимала коды
+     (у части записей prog плоский список байтов, а не пары), исключение
+     вылетало ДО renderShelf(), и список оставался старым — хотя
+     библиотека уже была записана. Ровно твоя картина: «ни в список,
+     ни в память».
+
+   Что теперь:
+
+   • импорт кладёт КАЖДУЮ запись из файла отдельной новой строкой,
+     под тем же именем, с теми же кодами, данными и текстом asm.
+     Ни переименований, ни перезаписей — файл есть файл;
+   • сравнение с библиотекой больше не склеивает записи. Повторный
+     импорт того же файла даст дубли — это честнее, чем молчание;
+   • saveLib возвращает true/false, импорт говорит прямо, если
+     браузер не принял запись (переполнение памяти, приватный режим);
+   • applyProgram обёрнут в try/catch: даже если коды не встанут
+     в калькулятор, список перерисуется и запись будет видна;
+   • после импорта тост считает честно: «добавлено N · всего M»,
+     а при нуле объясняет, почему.
+
+   Про форматы кодов: библиотека хранит prog как есть — плоским
+   списком байтов [1,65,97,…] или парами [[1,65],[97,96],…].
+   Оба вида принимаются, оба выгружаются обратно без изменений.
+   Превращение в пары делается только в момент загрузки в память
+   калькулятора (MKUI.loadProgram ждёт пары), а в файл и в библиотеку
+   запись идёт в том же виде, в каком пришла.
+
+   =========================================================
    ФОРМАТ ФАЙЛА (один и тот же у корпуса и у Алго):
      {
        app: "pmk61",
@@ -24,78 +51,11 @@
        programs: [ { id, name, prog: [...], data: {0:7}, layout: {n:0},
                      inputs: ["n"], src: "…", asm: "…", savedAt } ]
      }
-   Понимается и старый одиночный файл { prog, data, layout, src }.
+   Понимается и старый одиночный файл { prog, data, layout, src },
+   и голый массив программ.
 
    Ничего не считает само: вычисления в core.js, запуск — через
    мост window.MKUI из ui.js.
-
-   ПРАВКА v2 (26.11.2026) — ТЕКСТ АССЕМБЛЕРА ЖИВЁТ В БИБЛИОТЕКЕ
-
-   До этой правки коды сохранялись, а текст из поля ассемблера — нет.
-   Получалось так: собрал программу, сохранил в библиотеку, а вернуться
-   к правке текста нельзя — в записи только коды. Приходилось набирать
-   заново.
-
-   Что изменилось: в запись добавлено необязательное поле asm.
-   Ставится оно ровно в трёх местах, коды и регистры не тронуты:
-
-   • saveCurrent() — берёт текст из pmk61/asmsrc, то есть ровно то,
-     что лежит в поле редактора. Пустое поле — поля asm в записи нет
-     вовсе (не пустая строка), чтобы не путать «текста нет» с «текст
-     пустой»;
-   • importLib() — поле asm из файла больше не отбрасывается: раньше
-     нормализация entry собирала запись заново и теряла всё, чего
-     не было в списке полей;
-   • applyProgram() — шестой довод asmText возвращает текст в поле
-     #asmSrc и заодно пишет его в pmk61/asmsrc. В ключ — обязательно:
-     asm-editor.js пишет туда только по кнопкам (compile, пример,
-     очистка), на обычный input — тоже, но не при загрузке из
-     библиотеки. Без записи в ключ текст исчез бы после перезагрузки
-     страницы.
-
-   Старые записи без asm читаются как есть: перезагрузка такой записи
-   поле редактора не трогает. Именно поэтому флаг has не вводился —
-   отсутствие поля asm и есть честный признак «текста нет».
-
-   ПРАВКА v3 (26.11.2026) — МЕТКА ЗАПИСИ, СВЯЗКА КОДЫ↔ТЕКСТ
-
-   Было: парная запись искалась по имени. Имена совпадают случайно
-   и меняются при сохранении, поэтому нельзя было сказать наверняка,
-   к каким кодам относится текст.
-
-   Стало: у каждой записи есть id (строка вида p-<время>-<счётчик>).
-   Связка идёт по нему, имя остаётся подписью.
-
-   • newId() — метка при сохранении; ensureIds() проставляет метку
-     старым записям при чтении, не ломая формат: в файл она попадает
-     при следующей записи библиотеки;
-   • saveCurrent() — ставит id; если у записи с тем же id уже есть
-     текст asm, а новая программа пришла без него, старый текст
-     не затирается;
-   • importLib() — берёт id из файла, иначе выдаёт новый;
-   • renderShelf() — пара строк по id: сверху коды с кнопкой
-     «Загрузить», снизу «↳ тот же файл, asm» с кнопкой
-     «В редактор» — текст встаёт в поле, память не трогается;
-   • loadAsmOnly() — та самая кнопка «В редактор».
-
-   ПРАВКА v4 (26.11.2026) — ОТМЕТКИ И СОХРАНЕНИЕ ВЫБРАННЫХ В JSON
-
-   Нужно было сохранять не то, что лежит в памяти калькулятора, а любые
-   программы из списка — одну или десять сразу, одним файлом.
-
-   • у каждой записи «Мои» появился чекбокс; у встроенных примеров его
-     нет намеренно: их выгружать незачем, они есть в самой странице;
-   • отмеченные id лежат в наборе checked и переживают перерисовку
-     списка (проверка программы, удаление соседней строки и т. п.);
-   • внизу панели — строка «Отмечено: N» и кнопка «Сохранить отмеченные
-     в JSON». Ноль отмеченных — кнопка неактивна; никаких вопросов
-     «может, сохранить все?» нет и не будет;
-   • экспорт берёт ровно отмеченные записи целиком: prog, data, layout,
-     inputs, src, asm, savedAt, id. Никакой фильтрации по типу
-     программы: запись без текста asm выгружается так же, как запись
-     с текстом;
-   • импорт не изменился: каждая программа из файла встаёт в список
-     отдельной строкой, по одной на запись, ничего не склеивается.
    ========================================================= */
 (function () {
   'use strict';
@@ -103,8 +63,6 @@
   var LIB_KEY = 'pmk61/library';
   var BRIDGE_KEY = 'pmk61/bridge';
   var ASM_KEY = 'pmk61/asmsrc';
-
-  var NOP = 0x54;
 
   /* --- встроенные примеры ---
      prog — готовые коды ячеек. Важно про data: перед прогоном ui.js
@@ -123,8 +81,6 @@
       check: 'n = 7 → 5040',
       expect: 5040,
       data: { 0: 7 },
-      /* 00 1 · 01 X→П 1 · 02 П→X 1 · 03 П→X 0 · 04 × · 05 X→П 1
-         06 F L0 → 02 · 09 П→X 1 · 10 С/П   (7 итераций, 39 шагов) */
       prog: [0x01, 0x41, 0x61, 0x60, 0x12, 0x41, 0x5D, 0x00, 0x02, 0x61, 0x50]
     },
     {
@@ -194,23 +150,12 @@
     checkedCount = 0;
   }
 
-  /* ---------- мелкие помощники ---------- */
-  function pool(n, msg) {
-    for (var i = 0; i < n; i++) {
-      if (!window.MKSHELF_USED) window.MKSHELF_USED = {};
-      var id = 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-      if (!window.MKSHELF_USED[id]) { window.MKSHELF_USED[id] = 1; return id; }
-    }
-    return 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
-  }
-
   /* ---------- метка записи ---------- */
-  /* v3: id — постоянная метка программы. По ней связываются коды
-     и текст asm, поэтому имя может меняться, а пара остаётся. */
   var idSeq = 0;
   function newId() {
     idSeq++;
-    return 'p-' + Date.now().toString(36) + '-' + idSeq.toString(36);
+    return 'p-' + Date.now().toString(36) + '-' + idSeq.toString(36) +
+           Math.random().toString(36).slice(2, 5);
   }
 
   /* Старые записи без id получают его при чтении. В файл метка
@@ -267,9 +212,7 @@
   }
 
   /* ---------- текст ассемблера ----------
-     Один и тот же ключ, что у asm-editor.js (TEXT_KEY там). Читаем
-     и пишем через try: в приватном режиме localStorage может ругнуться,
-     а падать из-за этого библиотеке незачем. */
+     Один и тот же ключ, что у asm-editor.js (TEXT_KEY там). */
   function readAsm() {
     try {
       var t = localStorage.getItem(ASM_KEY);
@@ -281,16 +224,10 @@
     try { localStorage.setItem(ASM_KEY, String(text == null ? '' : text)); } catch (e) {}
   }
 
-  /* Поле редактора ищем по id, который создаёт asm-editor.js. Если
-     панель ещё не смонтирована (например, открыт другой экран),
-     просто молчим: текст уже лежит в ключе и подхватится при сборке
-     панели через loadText(). */
   function putAsmToField(text) {
     var area = document.getElementById('asmSrc');
     if (!area) return false;
     area.value = String(text == null ? '' : text);
-    /* input не будим: он зовёт saveText и renderDirty, а сборки не было.
-       Ручную строку состояния ставит сам редактор при следующей сборке. */
     return true;
   }
 
@@ -303,8 +240,18 @@
     } catch (e) { return []; }
   }
 
+  /* v5: честная запись. true — легло, строка — причина отказа.
+     Раньше пустой catch скрывал переполнение памяти браузера,
+     и импорт рапортовал успех, когда в хранилище ничего не было. */
   function saveLib(arr) {
-    try { localStorage.setItem(LIB_KEY, JSON.stringify(arr)); } catch (e) {}
+    try {
+      localStorage.setItem(LIB_KEY, JSON.stringify(arr));
+      return true;
+    } catch (e) {
+      var m = (e && e.message) ? e.message : String(e);
+      try { console.error('saveLib:', m); } catch (x) {}
+      return m;
+    }
   }
 
   function sameProg(a, b) {
@@ -380,8 +327,7 @@
     var mine = loadLib();
     ui.list.innerHTML = '';
 
-    /* Отметки могли указывать на уже удалённые записи — подчищаем,
-       чтобы счётчик не врал. */
+    /* Отметки могли указывать на уже удалённые записи — подчищаем. */
     Object.keys(checked).forEach(function (k) {
       var id = k.slice(2);
       if (!byId(mine, id)) { delete checked[k]; checkedCount--; }
@@ -436,9 +382,6 @@
         last: builtinLast['m:' + p.id]
       };
 
-      /* v3: если у записи есть текст asm — под ней вторая строка,
-         связанная по тому же id. Кнопка «В редактор» кладёт текст
-         в поле и НЕ трогает память калькулятора. */
       if (p.asm) acts.onEdit = function () { loadAsmOnly(p); };
 
       ui.list.appendChild(row(n, p.name, p.check || '', p.input || '', acts, true, meta.join(' · '),
@@ -475,8 +418,6 @@
     return bar;
   }
 
-  /* Правило простое: ничего не отмечено — кнопка серая и не нажимается.
-     Никаких «может, всё-таки сохранить всё?». */
   function paintCheckedBar() {
     var label = document.getElementById('shelfCheckedCount');
     var btn = document.getElementById('shelfExportChecked');
@@ -490,7 +431,6 @@
     }
   }
 
-  /* Чекбокс строки «Мои». У встроенных не вызывается. */
   function checkbox(id) {
     var box = document.createElement('input');
     box.type = 'checkbox';
@@ -506,10 +446,6 @@
     return box;
   }
 
-  /* row(): строка списка. asmInfo необязателен — если передан,
-     под мета-строкой появляется вложенная строка «↳ тот же файл, asm»
-     с кнопкой «В редактор». recordId необязателен: если передан,
-     слева появляется чекбокс (v4). */
   function row(num, title, check, input, acts, removable, meta, asmInfo, recordId) {
     var d = el('div', 'srow');
     d.style.cssText = 'display:flex;gap:9px;align-items:flex-start;';
@@ -559,7 +495,6 @@
 
     body.appendChild(btns);
 
-    /* v3: вложенная строка с текстом ассемблера */
     if (asmInfo && acts.onEdit) {
       var subRow = el('div', 'sasm');
       subRow.style.cssText = 'margin-top:8px;padding:7px 9px;border-radius:9px;' +
@@ -604,12 +539,40 @@
     return head + (keys.length > 4 ? ' …' : '');
   }
 
-  /* asmText — необязательный шестой довод (v2). Старые вызовы без него
-     работают ровно как раньше: поле редактора и ключ pmk61/asmsrc
-     не трогаются. */
+  /* v5: коды в память калькулятора loadProgram ждёт парами
+     [[код, адрес], …]. В библиотеке и в файле запись живёт плоским
+     списком байтов — превращение делаем ТОЛЬКО здесь, на входе
+     в память, и сам файл не трогаем. */
+  function toPairs(prog) {
+    if (!Array.isArray(prog) || !prog.length) return [];
+    if (Array.isArray(prog[0])) {
+      return prog.map(function (x) {
+        return [Number(x[0]) | 0, Number(x[1]) | 0];
+      });
+    }
+    var out = [];
+    for (var i = 0; i + 1 < prog.length; i += 2) {
+      out.push([Number(prog[i]) | 0, Number(prog[i + 1]) | 0]);
+    }
+    return out;
+  }
+
   function applyProgram(prog, data, title, num, silent, asmText) {
     if (!window.MKUI) return;
-    window.MKUI.loadProgram(prog, data, { num: num || null, title: title });
+
+    /* v5: падение loadProgram больше не срывает перерисовку списка.
+       Раньше именно здесь исключение уносило управление до
+       renderShelf(), и импортированная запись не появлялась на глазах,
+       хотя в хранилище уже лежала. */
+    try {
+      var pairs = toPairs(prog);
+      window.MKUI.loadProgram(pairs.length ? pairs : prog, data, { num: num || null, title: title });
+    } catch (e) {
+      try { console.error('applyProgram:', e); } catch (x) {}
+      if (!silent) toast('Коды не встали в память: ' +
+        ((e && e.message) ? e.message : String(e)), 'warn', 7000);
+      return;
+    }
 
     switchTab('code');
 
@@ -627,10 +590,6 @@
     }
   }
 
-  /* v3: кнопка «В редактор» — только текст.
-     Память калькулятора не трогается вообще: ни loadProgram, ни
-     регистры. Дальше пользователь сам решает — править или собрать
-     уже имеющейся кнопкой «Собрать и загрузить». */
   function loadAsmOnly(p) {
     if (!p || typeof p.asm !== 'string' || !p.asm.trim()) {
       toast('У этой записи нет текста ассемблера', 'warn');
@@ -667,10 +626,13 @@
     if (!window.MKUI || !window.MKUI.loadProgram) return;
 
     var title = obj.from || 'МК-Алго';
-    window.MKUI.loadProgram(obj.prog, obj.data || {}, { num: null, title: title });
+    try {
+      window.MKUI.loadProgram(toPairs(obj.prog), obj.data || {}, { num: null, title: title });
+    } catch (e) {
+      try { console.error('takeBridge:', e); } catch (x) {}
+    }
     switchTab('code');
 
-    /* Если у записи моста есть текст — возвращаем и его тем же путём. */
     if (typeof obj.asm === 'string' && obj.asm.length) {
       writeAsm(obj.asm);
       putAsmToField(obj.asm);
@@ -684,7 +646,12 @@
   /* ---------- проверка ---------- */
   function checkProgram(p, key, num) {
     if (!window.MKUI) return;
-    window.MKUI.loadProgram(p.prog, p.data || {}, { num: num || null, title: p.title });
+    try {
+      window.MKUI.loadProgram(toPairs(p.prog), p.data || {}, { num: num || null, title: p.title });
+    } catch (e) {
+      toast('Проверка не пошла: ' + ((e && e.message) ? e.message : String(e)), 'bad');
+      return;
+    }
     var r = window.MKUI.runForCheck(20000);
     var got = r.X;
     var exp = p.expect;
@@ -699,13 +666,13 @@
     };
 
     window.MKUI.hint(ok
-      ? 'Проверка «' + p.title + '»: совпало — ' + window.MKUI.fmt(got) + ', шагов ' + r.steps
-      : 'Проверка «' + p.title + '»: получено ' + window.MKUI.fmt(got) +
+      ? 'Проверка «' + (p.title || p.name) + '»: совпало — ' + window.MKUI.fmt(got) + ', шагов ' + r.steps
+      : 'Проверка «' + (p.title || p.name) + '»: получено ' + window.MKUI.fmt(got) +
         (typeof exp === 'number' ? ', ожидалось ' + exp : '') +
         ' · ' + (r.result === 'stop' ? 'С/П достигнуто' : r.result === 'error' ? 'ошибка' : 'лимит шагов'));
 
-    toast(ok ? '✓ «' + p.title + '»: ' + window.MKUI.fmt(got) + ', шагов ' + r.steps
-             : '✗ «' + p.title + '»: получено ' + window.MKUI.fmt(got), ok ? 'ok' : 'bad');
+    toast(ok ? '✓ «' + (p.title || p.name) + '»: ' + window.MKUI.fmt(got) + ', шагов ' + r.steps
+             : '✗ «' + (p.title || p.name) + '»: получено ' + window.MKUI.fmt(got), ok ? 'ok' : 'bad');
     renderShelf();
   }
 
@@ -736,8 +703,6 @@
       defName = freeName(arr, defName + (stampNow ? ' · ' + stampNow : ''));
     }
 
-    /* v3: если программа в памяти пришла из библиотеки, у неё уже есть
-       метка — предупреждаем, какую запись перезапишем. */
     var cur = (window.MKUI.getProgMeta && window.MKUI.getProgMeta()) || null;
     var curId = cur && cur.id ? cur.id : null;
 
@@ -745,16 +710,11 @@
     if (!name) return;
     name = String(name).trim() || 'Моя программа';
 
-    /* v2: текст из поля редактора. Раньше он терялся — в записи были
-       только коды, и вернуться к правке текста после сохранения было
-       нельзя. Пустое поле — поля asm в записи нет вовсе. */
     var asmText = readAsm();
 
     var entry = { id: null, name: name, prog: prog, data: regs, savedAt: Date.now() };
     if (asmText.trim()) entry.asm = asmText;
 
-    /* v3: ищем запись по метке, если она известна; иначе по имени.
-       По метке надёжнее: имя могли поменять, а программа та же. */
     var idx = -1;
     if (curId) {
       for (var a = 0; a < arr.length; a++) if (arr[a].id === curId) { idx = a; break; }
@@ -768,13 +728,10 @@
       entry.id = newId();
       arr.push(entry);
     } else if (sameProg(arr[idx].prog, entry.prog)) {
-      /* та же программа — обновляем запись, метку сохраняем;
-         старый текст asm не затираем пустым полем */
       entry.id = arr[idx].id;
       if (!entry.asm && arr[idx].asm) entry.asm = arr[idx].asm;
       arr[idx] = entry;
     } else {
-      /* программа другая — новая запись со своей меткой */
       entry.id = newId();
       var alt = freeName(arr, name + ' · ' + fmtShort(entry.savedAt));
       entry.name = alt;
@@ -782,7 +739,12 @@
       note = '\nсохранено как «' + alt + '» — имя было занято';
       name = alt;
     }
-    saveLib(arr);
+
+    var res = saveLib(arr);
+    if (res !== true) {
+      toast('НЕ записалось в память браузера\n' + res, 'bad', 9000);
+      return;
+    }
 
     var pos = arr.map(function (x) { return x.name; }).indexOf(name);
     var num = BUILTIN.length + pos + 1;
@@ -811,19 +773,26 @@
     return 'Из МК-Алго';
   }
 
+  /* v5: принимаем четыре вида записи файла —
+       • { programs: [...] }        — наш конверт
+       • [ {...}, {...} ]           — голый массив
+       • { prog: [...] }            — одна программа
+       • { prog: [[код,адрес],…] }  — одна программа парами
+     плюс запись без кодов, но с текстом asm — её тоже берём. */
   function progListFrom(obj) {
     var list = [];
     if (!obj) return list;
     if (Array.isArray(obj)) list = obj.slice();
     else if (Array.isArray(obj.programs)) list = obj.programs.slice();
-    else if (Array.isArray(obj.prog)) list = [obj];
+    else if (obj.prog || obj.asm) list = [obj];
     return list.filter(function (p) {
-      return p && Array.isArray(p.prog) && p.prog.length;
+      if (!p || typeof p !== 'object') return false;
+      var hasProg = Array.isArray(p.prog) && p.prog.length > 0;
+      var hasAsm = typeof p.asm === 'string' && p.asm.trim().length > 0;
+      return hasProg || hasAsm;
     });
   }
 
-  /* Запись целиком, без фильтров по типу: prog, data и прочее кладутся
-     как есть. Поле asm попадает в файл только если оно есть. */
   function fullRecord(p) {
     var r = {
       id: p.id,
@@ -869,11 +838,8 @@
     return data;
   }
 
-  /* v4: сохранение отмеченных. Список берём из библиотеки в её порядке,
-     а не в порядке нажатия галочек — так в файле программы идут так же,
-     как в панели. */
   function exportChecked() {
-    if (!checkedCount) return;   /* кнопка и так неактивна, но пусть будет */
+    if (!checkedCount) return;
 
     var arr = loadLib();
     var picked = arr.filter(function (p) { return p && isChecked(p.id); });
@@ -894,6 +860,10 @@
           fileNameNow(), 'ok', 8000);
   }
 
+  /* ---------- v5: ИМПОРТ ----------
+     ГЛАВНОЕ ПРАВИЛО: что в файле, то и в списке. Ничего не
+     переименовывается, ничего не перезаписывается, ничего не
+     отбрасывается. Каждая запись файла = одна новая строка «Мои». */
   function importLib(file) {
     if (!file) return;
     toast('Читаю файл: ' + file.name, 'ok', 1800);
@@ -915,21 +885,23 @@
         return;
       }
 
-      var fileSaved = obj && obj.saved ? obj.saved : null;
+      var fileSaved = obj && !Array.isArray(obj) && obj.saved ? obj.saved : null;
 
       var arr = loadLib();
-      var added = 0, replaced = 0;
+      var before = arr.length;
+      var added = 0;
+      var skipped = 0;
       var normalized = [];
-      var renamed = [];
 
       incoming.forEach(function (p) {
+        /* Имя — ровно как в файле. Никаких «· дата» и «(2)». */
         var name = String(p.name || p.title || guessName(p.src)).trim() || 'Без названия';
         var stamp = p.savedAt || (fileSaved ? Date.parse(fileSaved) : 0) || Date.now();
 
         var entry = {
           id: (typeof p.id === 'string' && p.id) ? p.id : newId(),
           name: name,
-          prog: p.prog.slice(),
+          prog: Array.isArray(p.prog) ? p.prog.slice() : [],
           data: (p.data && typeof p.data === 'object') ? p.data : {},
           savedAt: stamp
         };
@@ -937,64 +909,49 @@
         if (p.inputs) entry.inputs = p.inputs;
         if (p.src) entry.src = p.src;
         if (fileSaved) entry.saved = fileSaved;
-        /* v2: текст ассемблера из файла. Нормализация собирает запись
-           заново, и без этой строки поле asm молча терялось бы. */
         if (typeof p.asm === 'string' && p.asm.trim()) entry.asm = p.asm;
 
-        /* v3: ищем по метке, затем по имени */
-        var idx = -1;
-        var hit = byId(arr, entry.id);
-        if (hit) idx = arr.indexOf(hit);
-        if (idx < 0) {
-          for (var k = 0; k < arr.length; k++) if (arr[k].name === name) { idx = k; break; }
-        }
-
-        if (idx < 0) {
-          arr.push(entry);
-          added++;
-        } else if (JSON.stringify(arr[idx].prog) === JSON.stringify(entry.prog)) {
-          if (!entry.asm && arr[idx].asm) entry.asm = arr[idx].asm;
-          arr[idx] = entry;
-          replaced++;
-        } else {
+        /* Метка из файла может совпасть с уже лежащей записью —
+           в этом случае выдаём новую, чтобы не перезаписать чужое.
+           Имя при этом НЕ меняется. */
+        if (byId(arr, entry.id)) {
           entry.id = newId();
-          var alt = name + ' · ' + fmtShort(stamp);
-          var base = alt, s = 2;
-          while (arr.some(function (x) { return x.name === alt; })) {
-            alt = base + ' (' + s + ')';
-            s++;
-          }
-          entry.name = alt;
-          arr.push(entry);
-          added++;
-          renamed.push(alt);
+          while (byId(arr, entry.id)) entry.id = newId();
         }
 
+        arr.push(entry);
+        added++;
         normalized.push(entry);
       });
 
-      saveLib(arr);
+      if (!added) {
+        toast('Нечего добавлять: в файле не оказалось записей', 'warn', 7000);
+        return;
+      }
 
+      var res = saveLib(arr);
+
+      /* В память калькулятора — первую запись. В try: сбой памяти
+         не должен срывать перерисовку списка. */
       var first = normalized[0];
       applyProgram(first.prog, first.data, first.name, null, true, first.asm);
 
-      var regLine = regsText(first.data);
-      var when = fmtWhen(first.savedAt || fileSaved);
-      var libLine = 'список: +' + added + (replaced ? ' · обновлено ' + replaced : '') +
-                    ' · всего ' + arr.length;
-
-      var msg = 'Загружено в корпус: «' + first.name + '»\n' +
-                first.prog.length + ' ячеек · ' + regLine + '\n' +
-                (when ? 'файл от ' + when : 'дата в файле не указана') + '\n' +
-                libLine;
-      if (incoming.length > 1) msg += '\nв списке появилось строк: ' + incoming.length;
-      if (first.asm) msg += '\nс текстом asm';
-      if (renamed.length) msg += '\nсохранено как: ' + renamed.join(', ');
-
-      var hasRegs = Object.keys(first.data || {}).length > 0;
-      toast(msg, hasRegs ? 'ok' : 'warn', 9000);
-
       renderShelf();
+
+      var when = fmtWhen(first.savedAt || fileSaved);
+      var msg = 'Загружено: «' + first.name + '»\n' +
+                first.prog.length + ' ячеек · ' + regsText(first.data) + '\n' +
+                (when ? 'файл от ' + when + '\n' : '') +
+                'добавлено ' + added + ' · всего ' + arr.length;
+      if (incoming.length > 1) msg += '\nзаписей в файле: ' + incoming.length;
+      if (first.asm) msg += '\nс текстом asm';
+      if (skipped) msg += '\nпропущено: ' + skipped;
+
+      if (res !== true) {
+        toast(msg + '\n\n⚠ НЕ записалось в память браузера:\n' + res, 'bad', 12000);
+      } else {
+        toast(msg, 'ok', 9000);
+      }
     };
     reader.readAsText(file);
   }
@@ -1005,10 +962,6 @@
     if (ui.open) ui.open.addEventListener('click', openShelf);
     if (ui.close) ui.close.addEventListener('click', closeShelf);
     if (ui.save) ui.save.addEventListener('click', saveCurrent);
-
-    /* Старая кнопка «Сохранить в JSON» в шапке панели делает то же,
-       что и новая внизу: сохраняет отмеченные. Так нет двух разных
-       путей с разным смыслом. */
     if (ui.exp) ui.exp.addEventListener('click', exportChecked);
     if (ui.imp) ui.imp.addEventListener('click', function () { if (ui.file) ui.file.click(); });
     if (ui.file) {
@@ -1045,7 +998,6 @@
     putAsmToField: function (t) { return putAsmToField(t); },
     newId: newId,
     loadAsmOnly: loadAsmOnly,
-    /* v4: отметки */
     isChecked: isChecked,
     setChecked: setChecked,
     clearChecked: function () { clearChecked(); paintCheckedBar(); },
@@ -1056,8 +1008,6 @@
     exportChecked: exportChecked,
     exportSelected: exportChecked,
     saveAsm: function (name, asm, prog, data, id) {
-      /* v3: запись только-текста (без кодов в памяти).
-         Кладёт в ту же библиотеку, коды необязательны. */
       var arr = loadLib();
       asm = String(asm == null ? '' : asm);
       if (!asm.trim()) return null;
