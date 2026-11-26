@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трассировка v3 · pmk61</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#111;color:#ddd}
+  h1{font-size:17px;margin:0 0 4px}
+  .sub{font-size:12px;color:#888;margin-bottom:10px}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .tabs button{background:#222;color:#ccc;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:12px}
+  .tabs button.on{background:#2a4d3a;border-color:#4a9;color:#fff}
+  h2{font-size:14px;margin:14px 0 6px;color:#8fc}
+  table{border-collapse:collapse;width:100%;font-size:11px;font-family:ui-monospace,monospace}
+  th,td{border:1px solid #333;padding:2px 4px;text-align:right;white-space:nowrap}
+  th{background:#1d1d1d;color:#aaa;font-weight:normal}
+  td.l{text-align:left}
+  tr.jump td{background:#4a3f10}
+  tr.cond td{background:#12283d}
+  tr.err td{background:#4a1010}
+  .mem{font-family:ui-monospace,monospace;font-size:10px;color:#777;word-break:break-all;line-height:1.8}
+  .sum td.l{white-space:normal;text-align:left}
+  .ok{color:#5c5}.bad{color:#e66;font-weight:bold}
+  .hint{font-size:11px;color:#888;margin-top:4px}
+</style>
+</head>
+<body>
+<h1>Трассировка переходов v3</h1>
+<div class="sub">Настоящие MKExt61 + MKAsm. Жёлтая строка — ip ушёл не на +1. Синяя — команда условия.</div>
+<div class="tabs" id="tabs"></div>
+<div id="out">Загрузка…</div>
+
+<script src="core.js"></script>
+<script src="profiles.js"></script>
+<script src="ext61.js"></script>
+<script src="asm61.js"></script>
+<script>
+(function(){
+'use strict';
+
+var CASES = [
+  { t:'F X=0 · X=0',  src:'1\n1\n1\nX→П 9\n0\nF X=0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:222 },
+  { t:'F X=0 · X=5',  src:'1\n1\n1\nX→П 9\n5\nF X=0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:111 },
+  { t:'F X≠0 · X=5',  src:'1\n1\n1\nX→П 9\n5\nF X≠0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:222 },
+  { t:'F X≠0 · X=0',  src:'1\n1\n1\nX→П 9\n0\nF X≠0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:111 },
+  { t:'F X<0 · X=−3', src:'1\n1\n1\nX→П 9\n3\n/-/\nF X<0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:222 },
+  { t:'F X<0 · X=5',  src:'1\n1\n1\nX→П 9\n5\nF X<0 NEXT\n1\n1\n1\nБП DONE\nNEXT:\n2\n2\n2\nDONE:\nП→X 9\nС/П', r9:111 },
+  { t:'БП через пропуск', src:'5\nБП DONE\n2\n2\n2\nDONE:\n7\nС/П', r9:7 },
+  { t:'ПП SUB / В/О',  src:'5\nПП SUB\nС/П\nSUB:\n7\nВ/О', r9:72 }
+];
+
+var COND = [0x57,0x59,0x5C,0x5E,0x5D,0x5B,0x58,0x5A,0x51,0x53];
+function hex(c){ return (c&255).toString(16).toUpperCase().replace(/^(\d)$/,'0$1'); }
+function num(v){ return (typeof v==='number' && isFinite(v)) ? String(Math.round(v*1e8)/1e8) : String(v); }
+var cur = 0;
+
+function runCase(c){
+  var ext, core, asm, rows = [];
+
+  try {
+    ext = MKExt61.create({ progLen:105, regCount:15, addrHigh:true, addrHighFirst:100, addrHighLast:104, hasK:true });
+    core = ext.core;
+  } catch(e){
+    return { fatal:'MKExt61.create упал: '+e.message, journal:[], cells:[], rows:[], labels:{} };
+  }
+
+  try {
+    asm = MKAsm.assemble(c.src, { model:'mk-61', pageSize:105, pages:4 });
+  } catch(e){
+    return { fatal:'MKAsm.assemble упал: '+e.message, journal:[], cells:[], rows:[], labels:{} };
+  }
+
+  if (asm.errors && asm.errors.length){
+    return { fatal:'Ошибка сборки: '+asm.errors.map(function(e){return 'стр.'+e.line+': '+e.msg;}).join('; '),
+             journal:[], cells:asm.cells||[], rows:[], labels:asm.labels||{} };
+  }
+
+  var cells = asm.cells || [];
+  try {
+    core.setProgram(MKAsm.toProgram(cells, { len:105 }));
+    core.reset(true);
+  } catch(e){
+    return { fatal:'setProgram упал: '+e.message, journal:[], cells:cells, rows:[], labels:asm.labels||{} };
+  }
+
+  // шаги программы (для листинга)
+  var labels = asm.labels || {};
+  for (var i=0; i<cells.length; i++){
+    rows.push({ addr:i, code:cells[i], name:(MKCore.cmdName(cells[i],15)||'?') });
+  }
+
+  var journal = [];
+  for (var n=0; n<60; n++){
+    var ST = core.ST;
+    var ip = ST.ip;
+    var code = ST.prog[ip];
+    var before = { x:ST.X, y:ST.Y, z:ST.Z, r9:ST.R[9] };
+    var res;
+    try { res = core.step(); }
+    catch(e){ journal.push({n:n+1,ip:ip,code:code,b:before,a:{x:'',y:'',z:'',r9:''},ip2:ip,res:'EXC '+e.message,err:true}); break; }
+    var ST2 = core.ST;
+    journal.push({
+      n:n+1, ip:ip, code:code, b:before,
+      a:{ x:ST2.X, y:ST2.Y, z:ST2.Z, r9:ST2.R[9] },
+      ip2:ST2.ip, res:res, err:ST2.err
+    });
+    if (res==='stop' || res==='error') break;
+    if (journal.length>2 && ST2.ip===ip && res!=='jump') break;
+  }
+  return { journal:journal, cells:cells, rows:rows, labels:labels, fatal:null, r9want:c.r9 };
+}
+
+function render(){
+  var c = CASES[cur], r = runCase(c);
+  var h = '';
+
+  if (r.fatal){
+    h += '<div style="color:#e66;font-size:13px;padding:8px;border:1px solid #633;border-radius:6px">'+r.fatal+'</div>';
+    if (r.cells && r.cells.length){
+      h += '<h2>Ячейки (всё же собраны)</h2><div class="mem">'+r.cells.map(hex).join(' ')+'</div>';
+    }
+    document.getElementById('out').innerHTML = h;
+    return;
+  }
+
+  // листинг
+  h += '<details><summary style="color:#8fc;font-size:13px;margin:8px 0">Листинг ('+r.rows.length+' ячеек)</summary>';
+  h += '<table><tr><th>Адр</th><th>Код</th><th class="l">Команда</th></tr>';
+  r.rows.forEach(function(x){
+    h += '<tr><td>'+x.addr+'</td><td>'+hex(x.code)+'</td><td class="l">'+x.name+'</td></tr>';
+  });
+  h += '</table></details>';
+
+  // журнал
+  h += '<h2>Журнал ('+r.journal.length+' шагов)</h2>';
+  h += '<table><tr><th>Шаг</th><th>ip</th><th>Код</th><th>Команда</th><th>X до</th><th>Y до</th><th>R9 до</th><th>X пос</th><th>Y пос</th><th>R9 пос</th><th>ip пос</th><th>шаг</th></tr>';
+  r.journal.forEach(function(j){
+    var jump = (j.ip2 !== j.ip+1);
+    var cond = COND.indexOf(j.code)>=0;
+    var cls = j.err ? 'err' : (jump ? 'jump' : (cond ? 'cond' : ''));
+    h += '<tr class="'+cls+'"><td>'+j.n+'</td><td>'+j.ip+'</td><td>'+hex(j.code)+'</td>'
+       + '<td class="l">'+(MKCore.cmdName(j.code,15)||'?')+'</td>'
+       + '<td>'+num(j.b.x)+'</td><td>'+num(j.b.y)+'</td><td>'+num(j.b.r9)+'</td>'
+       + '<td>'+num(j.a.x)+'</td><td>'+num(j.a.y)+'</td><td>'+num(j.a.r9)+'</td>'
+       + '<td>'+j.ip2+'</td><td>'+j.res+'</td></tr>';
+  });
+  h += '</table>';
+
+  // чтение адреса
+  h += '<h2>Адреса переходов</h2><div class="mem">';
+  var anyAddr = false;
+  r.journal.forEach(function(j){
+    if (COND.indexOf(j.code)<0) return;
+    var b1 = r.cells[j.ip+1], b2 = r.cells[j.ip+2];
+    var l1 = (b1===undefined?0:b1), l2 = (b2===undefined?0:b2);
+    h += 'ip '+j.ip+': код '+hex(j.code)+' → байты '+l1+' '+l2
+       + ' → hi*10+lo='+(l1*10+l2)+' · lo*10+hi='+(l2*10+l1)+'<br>';
+    anyAddr = true;
+  });
+  if (!anyAddr) h += 'переходов нет';
+  h += '</div>';
+
+  if (Object.keys(r.labels).length){
+    h += '<h2>Метки</h2><div class="mem">';
+    for (var k in r.labels) h += k+' = '+r.labels[k]+'<br>';
+    h += '</div>';
+  }
+
+  // итог
+  var last = r.journal[r.journal.length-1] || { a:{} };
+  var got = last.a.r9;
+  var want = r.r9want;
+  var same = (got === want);
+  h += '<h2>Итог</h2><table class="sum"><tr><th class="l">Программа</th><th>X</th><th>Y</th><th>R9 факт</th><th>R9 ожид</th><th>Шагов</th></tr>';
+  h += '<tr><td class="l">'+c.t+'</td><td>'+num(last.a.x)+'</td><td>'+num(last.a.y)+'</td>'
+     + '<td class="'+(same?'ok':'bad')+'">'+num(got)+'</td><td>'+want+'</td><td>'+r.journal.length+'</td></tr></table>';
+  h += '<div class="hint">'+(same?'совпало':'НЕ совпало')+'</div>';
+
+  document.getElementById('out').innerHTML = h;
+}
+
+var tabs = document.getElementById('tabs');
+CASES.forEach(function(c,i){
+  var b = document.createElement('button');
+  b.textContent = (i+1)+'. '+c.t;
+  if (i===0) b.className='on';
+  b.onclick = function(){
+    cur = i;
+    Array.prototype.forEach.call(tabs.children, function(x){ x.className=''; });
+    b.className='on';
+    render();
+  };
+  tabs.appendChild(b);
+});
+
+// глобальный перехват ошибок, чтобы страница не оставалась пустой
+window.addEventListener('error', function(e){
+  document.getElementById('out').innerHTML = '<div style="color:#e66">JS-ошибка: '+e.message+'</div>';
+});
+
+render();
+})();
+</script>
+</body>
+</html>
