@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трассировка v2 · pmk61</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#111;color:#ddd}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:#777;font-size:12px;margin-bottom:10px}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .tabs button{background:#222;color:#ccc;border:1px solid #444;border-radius:6px;padding:6px 10px;font-size:13px;cursor:pointer}
+  .tabs button.on{background:#2a4d3a;border-color:#3a7a55;color:#fff}
+  h2{font-size:15px;margin:14px 0 6px;color:#8fc}
+  table{border-collapse:collapse;width:100%;font-size:12px;font-family:ui-monospace,monospace;margin-bottom:6px}
+  th,td{border:1px solid #333;padding:2px 5px;text-align:right;white-space:nowrap}
+  th{background:#1d1d1d;color:#aaa;font-weight:normal}
+  td.l{text-align:left}
+  tr.jump{background:#4a3f10}
+  tr.cond{background:#12283d}
+  tr.stop{background:#3a1a1a}
+  .mem{font-family:ui-monospace,monospace;font-size:11px;color:#888;word-break:break-all;line-height:1.7}
+  .sum td.l{white-space:normal}
+  .card{border:1px solid #2a2a2a;border-radius:8px;padding:10px;margin-bottom:12px;background:#161616}
+  .regs{font-family:ui-monospace,monospace;font-size:12px;color:#9c9}
+  .note{font-size:12px;color:#888;line-height:1.6}
+  .flag{color:#e88}
+  details summary{cursor:pointer;color:#8fc;font-size:13px;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>Трассировка переходов v2</h1>
+<div class="sub">Восемь программ. Каждая прогоняется по одному шагу через настоящее ядро (core.js + ext61.js + asm61.js). Жёлтая строка — ip ушёл не на +1 (прыжок). Синяя — команда условия.</div>
+<div class="tabs" id="tabs"></div>
+<div id="out"></div>
+
+<script src="core.js"></script>
+<script src="profiles.js"></script>
+<script src="ext61.js"></script>
+<script src="asm61.js"></script>
+<script>
+const CASES = [
+{n:1,t:"F X=0 · X=0",asm:`1
+1
+1
+X→П 9
+0
+F X=0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"222"},
+{n:2,t:"F X=0 · X=5",asm:`1
+1
+1
+X→П 9
+5
+F X=0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"111"},
+{n:3,t:"F X≠0 · X=5",asm:`1
+1
+1
+X→П 9
+5
+F X≠0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"222"},
+{n:4,t:"F X≠0 · X=0",asm:`1
+1
+1
+X→П 9
+0
+F X≠0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"111"},
+{n:5,t:"F X<0 · X=−3",asm:`1
+1
+1
+X→П 9
+3
+/-/
+F X<0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"222"},
+{n:6,t:"F X<0 · X=5",asm:`1
+1
+1
+X→П 9
+5
+F X<0 NEXT
+1
+1
+1
+БП DONE
+NEXT:
+2
+2
+2
+DONE:
+П→X 9
+С/П`, exp:"111"},
+{n:7,t:"БП через пропуск",asm:`5
+БП DONE
+2
+2
+2
+DONE:
+7
+С/П`, exp:"7"},
+{n:8,t:"ПП SUB / В/О",asm:`5
+ПП SUB
+7
+С/П
+SUB:
+9
+2
+В/О`, exp:"72"}
+];
+
+const COND = new Set([0x51,0x52,0x53,0x57,0x58,0x59,0x5A,0x5B,0x5C,0x5D,0x5E]);
+const hex = c => (c==null?'--':c.toString(16).toUpperCase().padStart(2,'0'));
+let cur=0;
+
+function asmCodes(src){
+  const lines = src.trim().split('\n').map(s=>s.trim()).filter(Boolean);
+  const rows = MKDasm.rows(lines);
+  const codes=[]; const addrOf={};
+  rows.forEach(r=>{ if(r.addr!=null) addrOf[r.src]=r.addr; if(!r.error) (r.codes||[]).forEach(x=>codes.push(x)); });
+  return {rows,codes};
+}
+
+function trace(c){
+  const core = MKCore.create({model:'mk-61-ext', programSize:420});
+  const ext = core.ext;
+  const {rows,codes} = asmCodes(c.asm);
+  ext.setProgram(codes);
+  if (core.reset) core.reset();
+
+  const J=[]; let halted=false;
+  for(let i=0;i<120;i++){
+    const s = core.state ? core.state() : {};
+    const ip = s.ip|0;
+    const code = codes[ip] ?? 0x54;
+    const x0=s.x, y0=s.y, r90=(ext.readReg?ext.readReg(9):(s.r9|0));
+    let err=null;
+    try{ core.step(); }catch(e){ err=e.message; }
+    const s2 = core.state ? core.state() : {};
+    J.push({n:i+1,ip,code,x0,y0,r90,x1:s2.x,y1:s2.y,r91:(ext.readReg?ext.readReg(9):(s2.r9|0)),ip2:s2.ip|0,halt:!!s2.halted,err});
+    if(s2.halted || err){halted=true;break;}
+    if(J.length>2 && J[J.length-1].ip2===J[J.length-2].ip2 && J[J.length-1].ip2===J[J.length-2].ip){halted=true;break;}
+  }
+  return {rows,codes,J,halted};
+}
+
+function render(){
+  const c=CASES[cur];
+  const {rows,codes,J,halted}=trace(c);
+  const last=J[J.length-1]||{x1:0,y1:0,r91:0};
+  let h=`<h2>${c.n}. ${c.t}</h2>`;
+
+  h+=`<div class="card"><details><summary>Листинг и память</summary>`;
+  h+=`<table><tr><th>Адр</th><th class="l">Запись</th><th class="l">Код</th><th class="l">Ошибка</th></tr>`;
+  rows.forEach(r=>{
+    h+=`<tr><td>${r.addr??''}</td><td class="l">${r.src??''}</td><td class="l">${r.codes?r.codes.map(hex).join(' '):''}</td><td class="l">${r.error??''}</td></tr>`;
+  });
+  h+=`</table><div class="mem">${codes.slice(0,70).map(hex).join(' ')}</div></details></div>`;
+
+  h+=`<table><tr><th>Шаг</th><th>ip</th><th>Код</th><th>X до</th><th>Y до</th><th>R9 до</th><th>X пос</th><th>Y пос</th><th>R9 пос</th><th>ip пос</th></tr>`;
+  J.forEach(j=>{
+    const jump=(j.ip2!==j.ip+1);
+    const cond=COND.has(j.code);
+    const cls=jump?'jump':(cond?'cond':'');
+    h+=`<tr class="${cls}"><td>${j.n}</td><td>${j.ip}</td><td>${hex(j.code)}</td><td>${j.x0}</td><td>${j.y0}</td><td>${j.r90}</td><td>${j.x1}</td><td>${j.y1}</td><td>${j.r91}</td><td>${j.ip2}</td></tr>`;
+  });
+  h+=`</table>`;
+
+  h+=`<details><summary>Чтение адресов (оба порядка)</summary><div class="mem">`;
+  J.forEach(j=>{
+    if(COND.has(j.code)){
+      const b1=codes[j.ip+1], b2=codes[j.ip+2];
+      const d1=(b1==null?NaN:(b1&0x0F)), d2=(b2==null?NaN:(b2&0x0F));
+      h+=`адрес ${j.ip}: код ${hex(j.code)} → байты ${hex(b1)} ${hex(b2)} → hi*10+lo=${d1*10+d2} · lo*10+hi=${d2*10+d1}<br>`;
+    }
+  });
+  h+=`</div></details>`;
+
+  const ok = String(last.r91)===c.exp;
+  h+=`<h2>Итог</h2><table class="sum">
+    <tr><th class="l">Программа</th><th>X</th><th>Y</th><th>R9</th><th>Ожид.</th><th>Проверка</th><th>Шагов</th></tr>
+    <tr><td class="l">${c.t}</td><td>${last.x1}</td><td>${last.y1}</td><td>${last.r91}</td><td>${c.exp}</td>
+    <td class="${ok?'':'flag'}">${ok?'совпало':'не совпало'}</td><td>${J.length}${halted?'':'(лимит)'}</td></tr>`;
+  h+=`</table>`;
+
+  h+=`<div class="card note">Правило в этом ядре: <b>если условие выполнено, адрес не воспринимается и идёт следующая команда; если не выполнено — переход на адрес</b>. Это и есть поведение, которое вы видите в жёлтых строках: они есть там, где условие <i>не</i> выполнялось.</div>`;
+
+  document.getElementById('out').innerHTML=h;
+}
+
+const tabs=document.getElementById('tabs');
+CASES.forEach((c,i)=>{
+  const b=document.createElement('button');
+  b.textContent=`${c.n}. ${c.t}`;
+  if(i===0)b.className='on';
+  b.onclick=()=>{cur=i;[...tabs.children].forEach(x=>x.className='');b.className='on';render();};
+  tabs.appendChild(b);
+});
+render();
+</script>
+</body>
+</html>
