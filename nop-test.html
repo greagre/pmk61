@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmk61 — К 1 (55) и К 2 (56)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px 14px 40px; background: #f4f2ec; color: #23262a; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #6b7076; margin: 0 0 16px; line-height: 1.45; }
+  .sum { font-size: 15px; font-weight: 600; padding: 10px 12px; border-radius: 8px;
+         background: #e8e5db; margin: 0 0 14px; }
+  .sum.ok { background: #dcefd8; color: #1d5b21; }
+  .sum.bad { background: #f6dbd8; color: #7d1f18; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; background: #fff;
+          border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e7e4db; vertical-align: top; }
+  th { background: #eceae3; font-weight: 600; font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  .st { width: 26px; font-weight: 700; text-align: center; }
+  .ok .st { color: #1d7a2a; }
+  .bad .st { color: #b3261e; }
+  .d { color: #6b7076; font-size: 12.5px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+  .note { font-size: 12.5px; color: #6b7076; margin-top: 16px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>К 1 (55) и К 2 (56) — пустые операторы</h1>
+<p class="sub">Ревизия 9. Ядро <code>core.js</code> отдавало на этих кодах ЕГГ0Г, а слой
+<code>nop-fix.js</code> делает их пустыми, как К НОП. Ниже — что должно получиться
+и что получилось на самом деле.</p>
+
+<div class="sum" id="sum">Идёт проверка…</div>
+<table>
+  <thead><tr><th class="st"></th><th>Что проверяем</th><th>Ожидание</th><th>Факт</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<p class="note">Прогон идёт по условному профилю МК-61: 105 шагов, 15 регистров,
+K-функции включены. Подключены только <code>core.js</code> и <code>nop-fix.js</code> —
+интерфейс, расширение и библиотека тут не нужны.</p>
+
+<script src="core.js?v=14"></script>
+<script src="nop-fix.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+  var rows = document.getElementById('rows');
+  var sum = document.getElementById('sum');
+  var ok = 0, bad = 0;
+
+  function show(name, expect, fact, pass, detail) {
+    var tr = document.createElement('tr');
+    tr.className = pass ? 'ok' : 'bad';
+    tr.innerHTML = '<td class="st">' + (pass ? '✓' : '✕') + '</td>' +
+      '<td>' + name + (detail ? '<div class="d">' + detail + '</div>' : '') + '</td>' +
+      '<td>' + expect + '</td><td>' + fact + '</td>';
+    rows.appendChild(tr);
+    if (pass) ok++; else bad++;
+  }
+
+  function makeCore() {
+    return MKCore.create({ progLen: 105, regCount: 15, hasK: true });
+  }
+
+  function prog(core, arr) { core.setProgram(arr, true); }
+
+  /* 1. К 1 не даёт ЕГГОГ */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x55, 0x50]);
+    var r = c.run(50);
+    show('К 1 (55) не даёт ЕГГ0Г', 'нет ЕГГ0Г', r.err ? 'ЕГГ0Г' : 'нет ЕГГ0Г', !r.err,
+         'программа 55 50');
+  })();
+
+  /* 2. Счётчик проходит через К 1 как через пустой шаг */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x55, 0x50]);
+    var r = c.run(50);
+    show('Счётчик проходит через К 1', '2 шага, С/П', r.steps + ' шагов, ' + r.result,
+         r.steps === 2 && r.result === 'stop', 'пустышка занимает свою ячейку');
+  })();
+
+  /* 3. X не меняется */
+  (function () {
+    var c = makeCore();
+    c.setX(7);
+    prog(c, [0x55, 0x50]);
+    var r = c.run(50);
+    show('К 1 не трогает X', 'X = 7', 'X = ' + c.ST.X, c.ST.X === 7, 'пустая команда');
+  })();
+
+  /* 4. К 2 не даёт ЕГГОГ */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x56, 0x50]);
+    var r = c.run(50);
+    show('К 2 (56) не даёт ЕГГ0Г', 'нет ЕГГ0Г', r.err ? 'ЕГГ0Г' : 'нет ЕГГ0Г', !r.err,
+         'программа 56 50');
+  })();
+
+  /* 5. Команда после пустышки исполняется */
+  (function () {
+    var c = makeCore();
+    c.ST.X = 2; c.ST.Y = 3;
+    prog(c, [0x56, 0x10, 0x50]);   /* К 2, +, С/П */
+    var r = c.run(50);
+    show('Сложение после К 2 работает', 'X = 5 (2 + 3)', 'X = ' + c.ST.X,
+         c.ST.X === 5 && !r.err, 'пустышка не сбивает поток');
+  })();
+
+  /* 6. Несколько пустышек подряд */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x55, 0x56, 0x55, 0x50]);
+    var r = c.run(50);
+    show('Три пустышки подряд', '4 шага, С/П', r.steps + ' шагов, ' + r.result,
+         r.steps === 4 && r.result === 'stop' && !r.err, 'адреса 00, 01, 02');
+  })();
+
+  /* 7. Подписи команд */
+  (function () {
+    var c = makeCore();
+    var a = c.cmdName(0x55), b = c.cmdName(0x56);
+    show('Подписи 55 и 56 в листинге', 'К 1 и К 2', a + ' и ' + b,
+         a === 'К 1' && b === 'К 2', 'берутся из таблицы ядра');
+  })();
+
+  /* 8. К НОП (54) работает как раньше */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x54, 0x50]);
+    var r = c.run(50);
+    show('К НОП (54) не сломан', '2 шага, без ЕГГ0Г', r.steps + ' шагов, ' + (r.err ? 'ЕГГ0Г' : 'нет ЕГГ0Г'),
+         r.steps === 2 && !r.err, 'ядро обрабатывает 54 само');
+  })();
+
+  /* 9. Логические 37–3A пока по-прежнему ЕГГОГ — их не трогали */
+  (function () {
+    var c = makeCore();
+    prog(c, [0x37, 0x50]);
+    var r = c.run(50);
+    show('К AND (37) всё ещё ЕГГ0Г', 'ЕГГ0Г', r.err ? 'ЕГГ0Г' : 'нет ЕГГ0Г', r.err,
+         'блок 37–3A — следующий заход');
+  })();
+
+  /* 10. Ручное нажатие К1 в режиме АВТ */
+  (function () {
+    var c = makeCore();
+    c.setX(4);
+    c.key({ a: 'code', c: 0x55 });
+    show('Нажатие К1 в режиме АВТ', 'X = 4, без ЕГГ0Г',
+         'X = ' + c.ST.X + ', ' + (c.ST.err ? 'ЕГГ0Г' : 'нет ЕГГ0Г'),
+         c.ST.X === 4 && !c.ST.err, 'слой перехватывает key()');
+  })();
+
+  /* 11. Запись в память в режиме ПРГ не изменилась */
+  (function () {
+    var c = makeCore();
+    c.ST.mode = 'PRG';
+    c.ST.ip = 0;
+    c.key({ a: 'code', c: 0x55 });
+    var cell = c.ST.prog[0], ip = c.ST.ip;
+    show('Запись К 1 в режиме ПРГ', 'ячейка 00 = 55, счётчик 01',
+         'ячейка 00 = ' + cell + ', счётчик ' + ip,
+         cell === 0x55 && ip === 1, 'в ПРГ слой не вмешивается');
+  })();
+
+  sum.className = 'sum ' + (bad === 0 ? 'ok' : 'bad');
+  sum.textContent = bad === 0
+    ? 'Все проверки зелёные: ' + ok + ' из ' + (ok + bad)
+    : 'Есть красные: ' + ok + ' зелёных, ' + bad + ' красных';
+})();
+</script>
+</body>
+</html>
