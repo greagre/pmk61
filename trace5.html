@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Трассировка переходов v5 · pmk61</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:12px 10px 40px;background:#111;color:#ddd}
+  h1{font-size:17px;margin:0 0 6px}
+  h2{font-size:14px;margin:16px 0 6px;color:#8fc}
+  .sub{font-size:12px;color:#888;margin:0 0 10px;line-height:1.5}
+  .warn{font-size:12px;color:#e8c;line-height:1.5;border-left:3px solid #a35;padding-left:8px;margin:0 0 10px}
+  table{border-collapse:collapse;width:100%;font-size:12px;font-family:ui-monospace,monospace;margin-bottom:8px}
+  th,td{border:1px solid #2e2e2e;padding:2px 5px;text-align:right;white-space:nowrap}
+  th{background:#1b1b1b;color:#999;font-weight:normal}
+  td.l{text-align:left;white-space:normal}
+  tr.pass td{color:#8d8}
+  tr.fail td{color:#e99}
+  tr.sel td{outline:1px solid #3a7a55}
+  #all tr{cursor:pointer}
+  tr.jump{background:#3d3410}
+  tr.cond{background:#102b40}
+  tr.err{background:#401414}
+  .mem{font-family:ui-monospace,monospace;font-size:11px;color:#777;word-break:break-all;line-height:1.8}
+  .ok{color:#6c6}.bad{color:#e77}
+  .card{border:1px solid #2e2e2e;border-radius:8px;padding:8px 10px;margin-bottom:12px}
+  .verdict{font-size:13px;margin:0}
+  .note{font-size:12px;color:#999;line-height:1.55;margin-top:6px}
+  details summary{cursor:pointer;font-size:12px;color:#8fc;margin:6px 0}
+</style>
+</head>
+<body>
+<h1>Трассировка переходов v5</h1>
+<p class="sub">17 тестов. Каждый прогоняется шаг за шагом через <code>MKCore.create()</code> из core.js.
+Ветки «истина» и «ложь» больше не пересекаются: каждая начинается с <code>Cx</code> и заканчивается своим
+<code>С/П</code>. Проверяется X и адрес остановки.</p>
+<p class="warn">Чем v5 отличается от v4: в v4 обе ветки заканчивались <code>П→X 9</code> при R9 = 111,
+поэтому оба пути давали 111 и ожидание 222 было недостижимо. Это была ошибка теста, а не ядра.</p>
+
+<div id="sum" class="verdict"></div>
+<table id="all"></table>
+<div id="out"></div>
+
+<script src="core.js"></script>
+<script>
+(function () {
+  'use strict';
+  var NOP = 0x54;
+  var JUMPS = [0x51, 0x53, 0x57, 0x59, 0x5C, 0x5E, 0x5D, 0x5B, 0x58, 0x5A];
+  var COND = [0x57, 0x59, 0x5C, 0x5E, 0x5D, 0x5B, 0x58, 0x5A];
+
+  function hex(c) { var s = (c & 255).toString(16).toUpperCase(); return s.length < 2 ? '0' + s : s; }
+  function isJump(c) { return JUMPS.indexOf(c) >= 0; }
+  function isCond(c) { return COND.indexOf(c) >= 0; }
+
+  function makeCore() {
+    return MKCore.create({
+      progLen: 105, regCount: 15, nop: NOP, maxDig: 8, hasK: true,
+      addrHigh: true, addrHighFirst: 100, addrHighLast: 104, angle: 'deg'
+    });
+  }
+
+  /* Программа из пар [адрес, [коды...]] — адреса задаются явно, без арифметики в голове. */
+  function prog(pairs) {
+    var p = new Array(105).fill(NOP);
+    pairs.forEach(function (pr) {
+      for (var i = 0; i < pr[1].length; i++) p[pr[0] + i] = pr[1][i];
+    });
+    return p;
+  }
+
+  /* Условие: набрать X -> команда условия -> ветка «истина» -> ветка «ложь».
+     Адрес перехода ставится на ветку «ложь»; ветка «истина» начинается
+     сразу после двух ячеек адреса. */
+  function condProg(code, digits, sign) {
+    var p = new Array(105).fill(NOP);
+    var a = 0;
+    digits.forEach(function (d) { p[a++] = d; });
+    if (sign) p[a++] = 0x0B;
+    var condAt = a;
+    p[a++] = code;
+    var addrAt = a; a += 2;
+    // ветка «условие выполнено»
+    p[a++] = 0x0D; p[a++] = 0x01; p[a++] = 0x01; p[a++] = 0x01; p[a++] = 0x50;
+    // ветка «условие не выполнено» — на неё указывает адрес
+    var falseAt = a;
+    p[a++] = 0x0D; p[a++] = 0x02; p[a++] = 0x02; p[a++] = 0x02; p[a++] = 0x50;
+    p[addrAt] = Math.floor(falseAt / 10);
+    p[addrAt + 1] = falseAt % 10;
+    return p;
+  }
+
+  var CASES = [
+    { n: 1, t: 'F X=0 · X=0', prog: condProg(0x5E, [0x00]), exp: 111, why: 'условие истинно → +3' },
+    { n: 2, t: 'F X=0 · X=5', prog: condProg(0x5E, [0x05]), exp: 222, why: 'условие ложно → адрес' },
+    { n: 3, t: 'F X≠0 · X=5', prog: condProg(0x57, [0x05]), exp: 111, why: 'условие истинно → +3' },
+    { n: 4, t: 'F X≠0 · X=0', prog: condProg(0x57, [0x00]), exp: 222, why: 'условие ложно → адрес' },
+    { n: 5, t: 'F X<0 · X=−3', prog: condProg(0x5C, [0x03], true), exp: 111, why: 'условие истинно → +3' },
+    { n: 6, t: 'F X<0 · X=5', prog: condProg(0x5C, [0x05]), exp: 222, why: 'условие ложно → адрес' },
+    { n: 7, t: 'F X≥0 · X=5', prog: condProg(0x59, [0x05]), exp: 111, why: 'условие истинно → +3' },
+    { n: 8, t: 'F X≥0 · X=−3', prog: condProg(0x59, [0x03], true), exp: 222, why: 'условие ложно → адрес' },
+
+    { n: 9, t: 'БП вперёд', exp: 7,
+      prog: prog([[0, [0x05]], [1, [0x51, 0x02, 0x00]], [4, [0x0D, 0x09, 0x50]], [20, [0x0D, 0x07, 0x50]]]),
+      why: 'БП 20 — ветка «9» на адресе 4 пропускается' },
+
+    { n: 10, t: 'ПП / В/О', exp: 7, expStop: 4,
+      prog: prog([[0, [0x05]], [1, [0x53, 0x00, 0x08]], [4, [0x50]], [8, [0x0D, 0x07, 0x52]]]),
+      why: 'возврат должен прийти на 04 (1+3)' },
+
+    { n: 11, t: 'Цикл F L0 ×3', exp: 3, expStop: 11,
+      prog: prog([[0, [0x03, 0x40]], [2, [0x0D]], [3, [0x69, 0x01, 0x10, 0x49]],
+                  [7, [0x5D, 0x00, 0x03]], [10, [0x69, 0x50]]]),
+      why: 'R0 = 3 → 2 → 1 → 0, тело выполняется три раза' },
+
+    { n: 12, t: 'В/О на пустом стеке', exp: 7, expStop: 3,
+      prog: prog([[0, [0x52]], [1, [0x0D, 0x07, 0x50]]]),
+      why: 'документ: стек вначале нулевой, возврат = 0 + 1 → адрес 01' },
+
+    { n: 13, t: 'К БП R1 · адрес −1', exp: 0, expStop: 29,
+      prog: prog([[0, [0x03, 0x00, 0x41]], [3, [0x0D]], [4, [0x81]], [29, [0x50]], [30, [0x50]]]),
+      why: 'R1 = 30, RG0–RG3: из содержимого вычитается 1 → 29' },
+
+    { n: 14, t: 'К БП R4 · адрес +1', exp: 0, expStop: 31,
+      prog: prog([[0, [0x03, 0x00, 0x44]], [3, [0x0D]], [4, [0x84]], [29, [0x50]], [31, [0x50]]]),
+      why: 'R4 = 30, RG4–RG6: прибавляется 1 → 31' },
+
+    { n: 15, t: 'К БП R8 · без изменений', exp: 0, expStop: 30,
+      prog: prog([[0, [0x03, 0x00, 0x48]], [3, [0x0D]], [4, [0x88]], [29, [0x50]], [30, [0x50]]]),
+      why: 'R8 = 30, RG7–RGe: содержимое не меняется → 30' },
+
+    { n: 16, t: 'К ПП R2 · вызов по адресу', exp: 7, expStop: 5,
+      prog: prog([[0, [0x02, 0x00, 0x42]], [3, [0x0D]], [4, [0xA2]], [5, [0x50]],
+                  [19, [0x0D, 0x07, 0x52]]]),
+      why: 'R2 = 20 → модификация −1 = 19, возврат на 05' },
+
+    { n: 17, t: 'К x≠0 R1 · истина', exp: 7, expStop: 8,
+      prog: prog([[0, [0x02, 0x00, 0x41]], [3, [0x0D]], [4, [0x05]], [5, [0x71]],
+                  [6, [0x0D, 0x07, 0x50]], [19, [0x0D, 0x09, 0x50]]]),
+      why: 'X = 5, условие истинно → следующая команда, адрес не берётся' }
+  ];
+
+  var results = [];
+  var cur = 0;
+
+  function listing(p) {
+    var rows = [], i = 0;
+    while (i < 105) {
+      var c = p[i];
+      if (c === NOP) {
+        var st = i;
+        while (i < 105 && p[i] === NOP) i++;
+        if (i - st >= 3) rows.push({ addr: st + '…' + (i - 1), src: '(пусто ×' + (i - st) + ')', code: '' });
+        continue;
+      }
+      if (isJump(c)) {
+        var a = p[i + 1], b = p[i + 2];
+        var ad = (a === 0x0A) ? ('-' + b) : (a * 10 + b);
+        rows.push({ addr: String(i), src: MKCore.cmdName(c, 15) + ' ' + ad,
+                    code: hex(c) + ' ' + hex(a) + ' ' + hex(b), jump: true });
+        i += 3;
+      } else {
+        rows.push({ addr: String(i), src: MKCore.cmdName(c, 15), code: hex(c) });
+        i += 1;
+      }
+    }
+    return rows;
+  }
+
+  function trace(p) {
+    var core = makeCore();
+    core.setProgram(p, false);
+    core.reset(false);
+    var jr = [], res = 'cont', n = 0, stopAt = -1;
+    while (n < 200) {
+      var ip = core.ST.ip;
+      var code = core.ST.prog[ip];
+      var x0 = core.ST.X, y0 = core.ST.Y, r90 = core.ST.R[9], sub0 = core.ST.sub.length;
+      res = core.step();
+      n++;
+      if (res === 'stop') stopAt = ip;
+      jr.push({ n: n, ip: ip, code: code, name: MKCore.cmdName(code, 15),
+                x0: x0, y0: y0, r90: r90, sub0: sub0,
+                x1: core.ST.X, y1: core.ST.Y, r91: core.ST.R[9], sub1: core.ST.sub.length,
+                ip1: core.ST.ip, res: res });
+      if (res === 'stop' || res === 'error') break;
+    }
+    return { jr: jr, res: res, stopAt: stopAt };
+  }
+
+  function runAll() {
+    results = CASES.map(function (c) {
+      var r = trace(c.prog);
+      var last = r.jr.length ? r.jr[r.jr.length - 1] : null;
+      var lastX = last ? last.x1 : 0;
+      var okStop = (c.expStop === undefined) ? true : (r.stopAt === c.expStop);
+      var pass = (r.res === 'stop' && lastX === c.exp && okStop);
+      return { c: c, r: r, lastX: lastX, pass: pass };
+    });
+  }
+
+  function renderSum() {
+    var pass = results.filter(function (x) { return x.pass; }).length;
+    var el = document.getElementById('sum');
+    el.innerHTML = 'Прошло <b>' + pass + '</b> из <b>' + results.length + '</b>. ' +
+      (pass === results.length ? 'Все тесты зелёные.' : 'Красные строки — расхождения, нажми на строку и посмотри журнал.');
+  }
+
+  function renderAll() {
+    var t = '<tr><th>№</th><th class="l">Тест</th><th>Ожид. X</th><th>Факт X</th>' +
+            '<th>Стоп на</th><th>Шагов</th><th>Итог</th></tr>';
+    results.forEach(function (r, i) {
+      var cls = (r.pass ? 'pass' : 'fail') + (i === cur ? ' sel' : '');
+      t += '<tr class="' + cls + '" data-i="' + i + '">' +
+        '<td>' + r.c.n + '</td><td class="l">' + r.c.t + '</td>' +
+        '<td>' + r.c.exp + '</td><td>' + r.lastX + '</td>' +
+        '<td>' + (r.r.stopAt >= 0 ? (r.r.stopAt < 10 ? '0' + r.r.stopAt : r.r.stopAt) : '—') + '</td>' +
+        '<td>' + r.r.jr.length + '</td>' +
+        '<td>' + (r.pass ? '✔' : '✘') + '</td></tr>';
+    });
+    var box = document.getElementById('all');
+    box.innerHTML = t;
+    Array.prototype.forEach.call(box.querySelectorAll('tr[data-i]'), function (tr) {
+      tr.onclick = function () { cur = parseInt(tr.getAttribute('data-i'), 10); renderAll(); render(); };
+    });
+  }
+
+  function render() {
+    var r = results[cur], c = r.c, jr = r.r.jr;
+    var h = '';
+
+    h += '<div class="card"><h2>' + c.n + '. ' + c.t + '</h2>';
+    h += '<p class="verdict ' + (r.pass ? 'ok' : 'bad') + '">' +
+         (r.pass ? '✔ совпало' : '✘ не совпало') +
+         ' — X = ' + r.lastX + ', ожидалось ' + c.exp +
+         ', остановка на ' + (r.r.stopAt >= 0 ? r.r.stopAt : 'нет') +
+         (c.expStop !== undefined ? ' (ожидалось ' + c.expStop + ')' : '') +
+         ', шагов ' + jr.length + ', итог шага: ' + r.r.res + '</p>';
+    h += '<div class="note">' + c.why + '</div></div>';
+
+    h += '<h2>Листинг</h2><table><tr><th>Адр</th><th class="l">Запись</th><th>Коды</th></tr>';
+    listing(c.prog).forEach(function (row) {
+      var cls = row.jump ? ' class="cond"' : '';
+      h += '<tr' + cls + '><td>' + row.addr + '</td><td class="l">' + row.src + '</td><td>' + row.code + '</td></tr>';
+    });
+    h += '</table>';
+
+    h += '<h2>Память</h2><div class="mem">';
+    var m = [];
+    for (var i = 0; i < 40; i++) m.push(hex(c.prog[i]));
+    h += m.join(' ') + '</div>';
+
+    h += '<h2>Журнал</h2><table>' +
+         '<tr><th>Шаг</th><th>ip</th><th>Код</th><th class="l">Команда</th>' +
+         '<th>X до</th><th>Y до</th><th>R9</th><th>ст</th>' +
+         '<th>X пос</th><th>Y пос</th><th>R9</th><th>ст</th><th>ip пос</th><th>шаг</th></tr>';
+    jr.forEach(function (j) {
+      var cls = '';
+      if (j.res === 'error') cls = 'err';
+      else if (j.ip1 !== j.ip + 1) cls = 'jump';
+      else if (isCond(j.code)) cls = 'cond';
+      h += '<tr' + (cls ? ' class="' + cls + '"' : '') + '>' +
+        '<td>' + j.n + '</td><td>' + j.ip + '</td><td>' + hex(j.code) + '</td>' +
+        '<td class="l">' + j.name + '</td>' +
+        '<td>' + j.x0 + '</td><td>' + j.y0 + '</td><td>' + j.r90 + '</td><td>' + j.sub0 + '</td>' +
+        '<td>' + j.x1 + '</td><td>' + j.y1 + '</td><td>' + j.r91 + '</td><td>' + j.sub1 + '</td>' +
+        '<td><b>' + j.ip1 + '</b></td><td>' + j.res + '</td></tr>';
+    });
+    h += '</table>';
+
+    h += '<details><summary>Что значат цвета и колонки</summary><div class="note">' +
+         'Синяя строка — команда условия. Жёлтая — ip ушёл не на +1, то есть был прыжок. ' +
+         'Красная — ядро вернуло ошибку. «ст» — глубина стека возврата до и после шага. ' +
+         'Колонка «шаг»: cont — следующая команда, jump — переход, stop — С/П, error — ЕГГ0Г.</div></details>';
+
+    document.getElementById('out').innerHTML = h;
+  }
+
+  try {
+    runAll();
+    renderSum();
+    renderAll();
+    render();
+  } catch (e) {
+    document.getElementById('out').innerHTML =
+      '<div class="card bad"><b>Ошибка страницы:</b> ' +
+      (e && e.message ? e.message : e) + '</div>';
+  }
+})();
+</script>
+</body>
+</html>
