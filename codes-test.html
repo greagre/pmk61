@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверки панели кодов — pmk61</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:16px;line-height:1.5;background:#12140f;color:#e8e9e3}
+  h1{font-size:18px;margin:0 0 4px}
+  p.lead{margin:0 0 14px;font-size:13px;opacity:.75}
+  .sum{padding:10px 12px;border-radius:10px;font-weight:600;margin-bottom:14px}
+  .sum.ok{background:rgba(26,140,74,.18);color:#7ee0a1}
+  .sum.err{background:rgba(192,57,43,.18);color:#ff9b8f}
+  ol{padding-left:22px;margin:0}
+  li{margin:0 0 8px;font-size:13px}
+  .yes{color:#7ee0a1}
+  .no{color:#ff9b8f}
+  code{background:rgba(127,127,127,.18);padding:1px 5px;border-radius:5px;font-size:12px}
+  a{color:#9fd0ff}
+</style>
+</head>
+<body>
+<h1>Проверки панели кодов</h1>
+<p class="lead">Чистая часть <code>codes-panel.js</code>: разбор кодов, сборка памяти, перенос в текст. Без калькулятора и без DOM.</p>
+<div class="sum" id="sum">Считаю…</div>
+<ol id="list"></ol>
+<p class="lead"><a href="index.html">← к калькулятору</a></p>
+
+<script src="codes-panel.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var P = window.MKCodePanel;
+  var list = document.getElementById('list');
+  var sum = document.getElementById('sum');
+  var ok = 0, total = 0;
+
+  function check(name, cond, detail) {
+    total++;
+    var li = document.createElement('li');
+    var mark = document.createElement('span');
+    mark.className = cond ? 'yes' : 'no';
+    mark.textContent = cond ? '✔ ' : '✘ ';
+    li.appendChild(mark);
+    li.appendChild(document.createTextNode(name));
+    if (!cond && detail) {
+      li.appendChild(document.createTextNode(' — ' + detail));
+    }
+    list.appendChild(li);
+    if (cond) ok++;
+  }
+
+  if (!P) {
+    sum.className = 'sum err';
+    sum.textContent = 'codes-panel.js не загрузился';
+    return;
+  }
+
+  /* 1. Простой список кодов */
+  var r1 = P.parseCodes('62 63 11 64 13 50', { len: 420 });
+  check('простой список: 6 кодов', r1.count === 6, 'получилось ' + r1.count);
+  check('простой список: адреса с 00 по 05',
+    r1.cells.length === 6 && r1.cells[0].addr === 0 && r1.cells[5].addr === 5,
+    'первый ' + (r1.cells[0] && r1.cells[0].addr) + ', последний ' + (r1.cells[5] && r1.cells[5].addr));
+  check('простой список: код 0x62 = 98', r1.cells[0].code === 0x62, 'вышло ' + r1.cells[0].code);
+
+  /* 2. Другие разделители */
+  var r2 = P.parseCodes('62,63,11', { len: 420 });
+  check('запятые: 3 кода', r2.count === 3, 'получилось ' + r2.count);
+
+  var r3 = P.parseCodes('62\n63\n11', { len: 420 });
+  check('переводы строк: 3 кода', r3.count === 3, 'получилось ' + r3.count);
+
+  /* 3. Коды с адресами */
+  var r4 = P.parseCodes('[62,0] [63,1] [11,2]', { len: 420 });
+  check('пары в скобках: 3 кода', r4.count === 3, 'получилось ' + r4.count);
+  check('пары в скобках: режим pairs', r4.mode === 'pairs', 'режим ' + r4.mode);
+  check('пары в скобках: адрес первого 0', r4.cells[0] && r4.cells[0].addr === 0,
+    'адрес ' + (r4.cells[0] && r4.cells[0].addr));
+
+  var r5 = P.parseCodes('62:10 63:11', { len: 420 });
+  check('двоеточие: 2 кода', r5.count === 2, 'получилось ' + r5.count);
+  check('двоеточие: адреса 10 и 11',
+    r5.cells.length === 2 && r5.cells[0].addr === 10 && r5.cells[1].addr === 11,
+    r5.cells[0] ? (r5.cells[0].addr + ', ' + r5.cells[1].addr) : 'нет');
+
+  /* 4. Шестнадцатеричные формы */
+  var r6 = P.parseCodes('ff fe', { len: 420 });
+  check('строчные буквы: 0xFF = 255', r6.cells[0] && r6.cells[0].code === 255,
+    'вышло ' + (r6.cells[0] && r6.cells[0].code));
+
+  var r7 = P.parseCodes('0x62 0x63', { len: 420 });
+  check('форма 0x: 2 кода по 98 и 99',
+    r7.count === 2 && r7.cells[0].code === 98 && r7.cells[1].code === 99,
+    r7.cells[0] ? (r7.cells[0].code + ', ' + r7.cells[1].code) : 'нет');
+
+  /* 5. Комментарии */
+  var r8 = P.parseCodes('62 ; это П→X2\n63 # и это', { len: 420 });
+  check('комментарии вырезаны: 2 кода', r8.count === 2, 'получилось ' + r8.count);
+
+  /* 6. Начальный адрес */
+  var r9 = P.parseCodes('62 63 11', { len: 420, start: 5 });
+  check('начальный адрес 5: первый код на 05',
+    r9.cells[0] && r9.cells[0].addr === 5, 'адрес ' + (r9.cells[0] && r9.cells[0].addr));
+
+  /* 7. Ошибки */
+  var r10 = P.parseCodes('1FF', { len: 420 });
+  check('код больше FF: ошибка и не грузится', r10.ok === false, 'ok = ' + r10.ok);
+
+  var r11 = P.parseCodes('62 63 11 64 13 50 62 63 11 64 13 50', { len: 10 });
+  check('не влезает в память: есть ошибка', r11.errors.length > 0, 'ошибок ' + r11.errors.length);
+
+  var r12 = P.parseCodes('', { len: 420 });
+  check('пустая строка: кодов нет и не падает', r12.count === 0 && r12.errors.length > 0,
+    'кодов ' + r12.count + ', ошибок ' + r12.errors.length);
+
+  /* 8. Сборка памяти */
+  var cells = [{ code: 0x62, addr: 0 }, { code: 0x50, addr: 3 }];
+  var base = [];
+  for (var i = 0; i < 6; i++) base.push(0x54);
+  var flat = P.buildFlat(cells, 6, base);
+  check('buildFlat: длина 6', flat.length === 6, 'длина ' + flat.length);
+  check('buildFlat: код 62 на 00', flat[0] === 0x62, 'вышло ' + flat[0]);
+  check('buildFlat: код 50 на 03', flat[3] === 0x50, 'вышло ' + flat[3]);
+  check('buildFlat: между ними К НОП', flat[1] === 0x54 && flat[2] === 0x54,
+    flat[1] + ', ' + flat[2]);
+
+  /* 9. Перенос в текст */
+  var txt = P.toAsmText([{ code: 0x62, addr: 0 }, { code: 0x50, addr: 2 }], {});
+  check('toAsmText: пропуск заполнен .54',
+    txt.split('\n').length === 3 && txt.split('\n')[1] === '.54', JSON.stringify(txt));
+  check('toAsmText: первая строка .62', txt.split('\n')[0] === '.62', txt.split('\n')[0]);
+
+  /* 10. Из памяти */
+  var mem = [0x62, 0x63, 0x54, 0x54];
+  var mc = P.memCodes(mem);
+  check('memCodes: хвост НОП срезан', mc.length === 2, 'длина ' + mc.length);
+  check('memCodes: hex2(0x0A) = "0A"', P.hex2(0x0A) === '0A', P.hex2(0x0A));
+
+  sum.className = 'sum ' + (ok === total ? 'ok' : 'err');
+  sum.textContent = ok + ' из ' + total + (ok === total ? ' — всё зелёное' : ' — есть красные');
+})();
+</script>
+</body>
+</html>
