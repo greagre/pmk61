@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#d7d3c4">
+<title>Проверка синонимов команд — МК-61</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;
+       background:#f4f2ea;color:#222;line-height:1.5}
+  h1{font-size:19px;margin:0 0 6px}
+  .sub{font-size:13px;opacity:.75;margin-bottom:14px}
+  .sum{padding:10px 12px;border-radius:10px;font-weight:600;font-size:14px;margin-bottom:14px}
+  .sum.ok{background:#e2f5e8;color:#17673a}
+  .sum.err{background:#fde6e4;color:#a02b1e}
+  ol{margin:0;padding-left:22px}
+  li{margin:7px 0;font-size:14px}
+  li .m{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;opacity:.7;display:block}
+  .yes{color:#17673a}
+  .no{color:#a02b1e}
+  .skip{margin-top:16px;font-size:12px;opacity:.75;font-family:ui-monospace,Menlo,Consolas,monospace;
+        word-break:break-word}
+  a{color:#1a5fb4}
+</style>
+</head>
+<body>
+<h1>Проверка синонимов команд</h1>
+<div class="sub">Проверяет codes-aliases.js: разбор программ, записанных чужими обозначениями —
+  ИП, X#0, 10**X, KB, L2, CX, +/-. Коды берутся из нашей таблицы, а не из чужой.</div>
+<div class="sum" id="sum">…</div>
+<ol id="list"></ol>
+<div class="skip" id="skip"></div>
+
+<script src="core.js?v=14"></script>
+<script src="disasm61.js?v=8"></script>
+<script src="codes-panel.js?v=2"></script>
+<script src="codes-names-fix.js?v=1"></script>
+<script src="codes-aliases.js?v=1"></script>
+<script>
+(function () {
+  var P = window.MKCodePanel;
+  var A = window.MKCodesAliases;
+  var list = document.getElementById('list');
+  var sum = document.getElementById('sum');
+  var skipBox = document.getElementById('skip');
+  var total = 0, pass = 0;
+
+  function check(name, ok, more) {
+    total++;
+    if (ok) pass++;
+    var li = document.createElement('li');
+    var mark = document.createElement('span');
+    mark.className = ok ? 'yes' : 'no';
+    mark.textContent = (ok ? '✔ ' : '✘ ') + name;
+    li.appendChild(mark);
+    if (more) {
+      var m = document.createElement('span');
+      m.className = 'm';
+      m.textContent = more;
+      li.appendChild(m);
+    }
+    list.appendChild(li);
+  }
+
+  function codesOf(text) {
+    if (!P) return null;
+    var r = P.parseKeys(text, { len: 420 });
+    if (!r || !r.count) return null;
+    var out = [];
+    for (var i = 0; i < r.cells.length; i++) out.push(r.cells[i].code);
+    return out;
+  }
+
+  function codeOf(text) {
+    var c = codesOf(text);
+    return (c && c.length === 1) ? c[0] : -1;
+  }
+
+  function hex(n) {
+    if (n < 0) return '—';
+    var s = n.toString(16).toUpperCase();
+    return s.length < 2 ? '0' + s : s;
+  }
+
+  function same(a, b) {
+    var ca = codeOf(a), cb = codeOf(b);
+    return ca >= 0 && ca === cb;
+  }
+
+  if (!P) {
+    sum.className = 'sum err';
+    sum.textContent = 'Панель кодов не загрузилась — проверь codes-panel.js';
+    return;
+  }
+
+  check('ИП2 узнаётся и даёт код 62', codeOf('ИП2') === 0x62,
+    'получено ' + hex(codeOf('ИП2')));
+  check('Пх2 узнаётся и даёт тот же код', codeOf('Пх2') === 0x62,
+    'получено ' + hex(codeOf('Пх2')));
+  check('ИП с пробелом: «ИП 3» — код 63', codeOf('ИП 3') === 0x63,
+    'получено ' + hex(codeOf('ИП 3')));
+
+  var prog = codesOf('ИП2 ИП3 − ИП4 ÷ С/П');
+  var want = [0x62, 0x63, 0x11, 0x64, 0x13, 0x50];
+  var progOk = !!prog && prog.length === want.length;
+  if (progOk) {
+    for (var i = 0; i < want.length; i++) if (prog[i] !== want[i]) progOk = false;
+  }
+  check('программа чужими обозначениями даёт 62 63 11 64 13 50', progOk,
+    prog ? prog.map(hex).join(' ') : 'не разобрано');
+
+  check('K0 = К НОП', same('K0', 'К НОП'), hex(codeOf('K0')));
+  check('KB = К ∨', same('KB', 'К ∨'), hex(codeOf('KB')));
+  check('KA = К ∧', same('KA', 'К ∧'), hex(codeOf('KA')));
+  check('KC = К ⊕', same('KC', 'К ⊕'), hex(codeOf('KC')));
+  check('KD = К ИНВ', same('KD', 'К ИНВ'), hex(codeOf('KD')));
+
+  check('X#0 = Fx≠0', same('X#0', 'Fx≠0'), hex(codeOf('X#0')));
+  check('X!=0 = Fx≠0', same('X!=0', 'Fx≠0'), hex(codeOf('X!=0')));
+  check('X>=0 = Fx≥0', same('X>=0', 'Fx≥0'), hex(codeOf('X>=0')));
+  check('X<0 = Fx<0', same('X<0', 'Fx<0'), hex(codeOf('X<0')));
+
+  check('10**X = F10^x', same('10**X', 'F10^x'), hex(codeOf('10**X')));
+  check('E^X = F e^x', same('E^X', 'F e^x'), hex(codeOf('E^X')));
+  check('SIN = F sin', same('SIN', 'F sin'), hex(codeOf('SIN')));
+  check('ARCSIN = F sin⁻¹', same('ARCSIN', 'F sin⁻¹'), hex(codeOf('ARCSIN')));
+
+  check('L0 = F L0', same('L0', 'F L0'), hex(codeOf('L0')));
+  check('L2 узнаётся', codeOf('L2') >= 0, hex(codeOf('L2')));
+  check('CX = Cx', same('CX', 'Cx'), hex(codeOf('CX')));
+  check('+/- = /-/', same('+/-', '/-/'), hex(codeOf('+/-')));
+  check('B↑ = В↑', same('B↑', 'В↑'), hex(codeOf('B↑')));
+  check('<-> = ↔', same('<->', '↔'), hex(codeOf('<->')));
+  check('P→X2 латиницей узнаётся', codeOf('PX2') === 0x62, hex(codeOf('PX2')));
+  check('KBKOР = F √', same('KBKOР', 'F √') || same('KBKOР', '√'),
+    hex(codeOf('KBKOР')));
+  check('ЧM = К Ч→М', same('ЧM', 'К Ч→М'), hex(codeOf('ЧM')));
+
+  check('П→X2 по-прежнему 62 (регрессия)', codeOf('П→X2') === 0x62, hex(codeOf('П→X2')));
+  check('С/П по-прежнему 50', codeOf('С/П') === 0x50, hex(codeOf('С/П')));
+  check('К 1 по-прежнему 55', codeOf('К 1') === 0x55, hex(codeOf('К 1')));
+
+  check('групп синонимов больше 30', !!A && A.groups > 30, A ? 'групп ' + A.groups : 'нет слоя');
+  check('добавлено больше 100 ключей', !!A && A.added > 100, A ? 'ключей ' + A.added : 'нет слоя');
+  check('все группы найдены в нашей карте', !!A && A.skipped.length === 0,
+    A ? 'не найдено: ' + A.skipped.length : 'нет слоя');
+
+  if (A && A.skipped && A.skipped.length) {
+    skipBox.textContent = 'Не нашлось в нашей карте (пропущены целиком): ' + A.skipped.join(' · ');
+  } else {
+    skipBox.textContent = 'Все группы привязаны к кодам нашей таблицы.';
+  }
+
+  sum.className = 'sum ' + (pass === total ? 'ok' : 'err');
+  sum.textContent = pass + ' из ' + total + (pass === total ? ' — всё зелёное' : ' — есть красные');
+})();
+</script>
+</body>
+</html>
