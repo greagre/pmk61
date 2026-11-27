@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка ловушки ЕГГОГ — pmk61</title>
+<style>
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 16px; background: #f4f2ea; color: #222; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: #666; margin-bottom: 14px; }
+  .sum { font-weight: 700; margin: 12px 0; padding: 10px 12px; border-radius: 8px; background: #e7e3d5; }
+  .sum.ok { background: #d8efd8; }
+  .sum.bad { background: #f6d8d8; }
+  ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .ok { color: #1a7f37; }
+  .bad { color: #b42318; }
+  code { background: #e9e5d8; padding: 1px 4px; border-radius: 4px; }
+  .note { color: #666; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Ловушка ЕГГОГ</h1>
+<div class="sub">Проверяет err-fix.js: X1 получает X, счётчик идёт на адрес + 2, ячейка после ловушки при продолжении пропускается.</div>
+
+<div class="sum" id="sum">Идёт проверка…</div>
+<ol id="list"></ol>
+
+<div class="note">Ячейки задаются кодами: 13 = ÷, 15 = 10^x, 21 = √, 37 = К AND, 50 = С/П, 51 = БП, 54 = К НОП, 55 = К 1.</div>
+
+<script src="core.js?v=14"></script>
+<script src="nop-fix.js?v=1"></script>
+<script src="err-fix.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+  var out = document.getElementById('list');
+  var sum = document.getElementById('sum');
+  var passed = 0, failed = 0;
+
+  function mk(prog) {
+    var c = MKCore.create({
+      progLen: 105, regCount: 15, hasK: true,
+      addrHigh: true, addrHighFirst: 100, addrHighLast: 104,
+      maxDig: 8, nop: 0x54, angle: 'deg'
+    });
+    c.setProgram(prog);
+    return c;
+  }
+
+  function check(name, fn) {
+    var li = document.createElement('li');
+    var ok = false, detail = '';
+    try {
+      var r = fn();
+      ok = r === true || (r && r.ok);
+      if (r && typeof r === 'object' && r.detail) detail = r.detail;
+    } catch (e) {
+      ok = false;
+      detail = e && e.message ? e.message : String(e);
+    }
+    li.className = ok ? 'ok' : 'bad';
+    li.innerHTML = (ok ? '✔ ' : '✘ ') + name + (detail ? ' <span class="note">— ' + detail + '</span>' : '');
+    out.appendChild(li);
+    if (ok) passed++; else failed++;
+  }
+
+  /* 1. Ошибка в программе — ip на адрес + 2 */
+  check('деление на ноль: счётчик уходит на адрес + 2', function () {
+    var c = mk([0x13, 0x15, 0x50]);
+    c.setX(0); c.ST.Y = 5;
+    c.run();
+    return c.ST.err === true && c.ST.ip === 2
+      ? true
+      : { ok: false, detail: 'err=' + c.ST.err + ', ip=' + c.ST.ip };
+  });
+
+  /* 2. X не изменился, X1 получил X */
+  check('X остаётся, X1 получает X', function () {
+    var c = mk([0x13, 0x15, 0x50]);
+    c.setX(0); c.ST.Y = 5;
+    c.run();
+    return c.ST.X === 0 && c.ST.X1 === 0
+      ? true
+      : { ok: false, detail: 'X=' + c.ST.X + ', X1=' + c.ST.X1 };
+  });
+
+  /* 3. Ячейка сразу после ловушки при продолжении пропускается */
+  check('продолжение пропускает ячейку после ловушки', function () {
+    var c = mk([0x13, 0x15, 0x50]);   /* 15 = 10^x дал бы 1 */
+    c.setX(0); c.ST.Y = 5;
+    c.run();
+    var r = c.run();                  /* продолжение с ip = 2 */
+    return r.result === 'stop' && c.ST.X === 0
+      ? true
+      : { ok: false, detail: 'result=' + r.result + ', X=' + c.ST.X };
+  });
+
+  /* 4. Ловушка не с первого адреса */
+  check('ловушка на адресе 02 даёт ip = 4', function () {
+    var c = mk([0x54, 0x54, 0x13, 0x50]);
+    c.setX(0); c.ST.Y = 5;
+    c.run();
+    return c.ST.ip === 4 ? true : { ok: false, detail: 'ip=' + c.ST.ip };
+  });
+
+  /* 5. Ошибочное значение остаётся в X и копируется в X1 */
+  check('корень из −5: X = −5 и X1 = −5', function () {
+    var c = mk([0x21, 0x50]);
+    c.setX(-5);
+    c.run();
+    return c.ST.err && c.ST.X === -5 && c.ST.X1 === -5
+      ? true
+      : { ok: false, detail: 'X=' + c.ST.X + ', X1=' + c.ST.X1 };
+  });
+
+  /* 6. Нормальная программа не затронута */
+  check('обычный останов не считается ошибкой', function () {
+    var c = mk([0x50]);
+    var r = c.run();
+    return r.result === 'stop' && !c.ST.err
+      ? true
+      : { ok: false, detail: 'result=' + r.result + ', err=' + c.ST.err };
+  });
+
+  /* 7. Ошибка адреса перехода не сдвигается на +2 */
+  check('ошибка адреса перехода оставляет ip на месте', function () {
+    var c = mk([0x51, 0x0A, 0x09]);   /* «-9» — за пределами 104 */
+    var r = c.run();
+    return r.result === 'error' && c.ST.ip === 0
+      ? true
+      : { ok: false, detail: 'result=' + r.result + ', ip=' + c.ST.ip };
+  });
+
+  /* 8. К AND ещё не реализована — но ловушка работает и для неё */
+  check('К AND (0x37) даёт ловушку с ip = 2', function () {
+    var c = mk([0x37, 0x50]);
+    c.setX(5); c.ST.Y = 3;
+    c.run();
+    return c.ST.err && c.ST.ip === 2
+      ? true
+      : { ok: false, detail: 'err=' + c.ST.err + ', ip=' + c.ST.ip };
+  });
+
+  /* 9. К 1 — не ловушка (её закрывает nop-fix) */
+  check('К 1 (0x55) не даёт ошибки', function () {
+    var c = mk([0x55, 0x50]);
+    var r = c.run();
+    return r.result === 'stop' && !c.ST.err
+      ? true
+      : { ok: false, detail: 'result=' + r.result + ', err=' + c.ST.err };
+  });
+
+  /* 10. Ручная ошибка не двигает счётчик программы */
+  check('ручная ошибка не двигает ip, но заполняет X1', function () {
+    var c = mk([0x54]);
+    c.setX(0); c.ST.Y = 5;
+    c.key({ a: 'code', c: 0x13 });
+    return c.ST.err === true && c.ST.ip === 0 && c.ST.X1 === 0
+      ? true
+      : { ok: false, detail: 'err=' + c.ST.err + ', ip=' + c.ST.ip + ', X1=' + c.ST.X1 };
+  });
+
+  var total = passed + failed;
+  sum.textContent = passed + ' из ' + total + (failed ? ' — есть красные' : ' — всё зелёное');
+  sum.className = 'sum ' + (failed ? 'bad' : 'ok');
+})();
+</script>
+</body>
+</html>
