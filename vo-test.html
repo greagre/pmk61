@@ -35,8 +35,10 @@ var OPTS = {
   hasK: true, addrHigh: true, addrHighFirst: 100, addrHighLast: 104
 };
 
-/* 00: В/О, 01: цифра 7, 02: С/П, остальное — К НОП (0x54) */
-function buildProgram() {
+/* Адрес перехода занимает две ячейки: ПЕРВАЯ — десятки, ВТОРАЯ — единицы. */
+
+/* Программа 1: 00: В/О, 01: цифра 7, 02: С/П */
+function progVo() {
   var p = new Array(105).fill(0x54);
   p[0] = 0x52;
   p[1] = 0x07;
@@ -44,9 +46,21 @@ function buildProgram() {
   return p;
 }
 
-function runCase(factory, limit) {
+/* Программа 2: 00: ПП 05, 03: цифра 7, 04: С/П, 05: цифра 2, 06: В/О
+   Адрес 05 = десятки 0, единицы 5. */
+function progPp() {
+  var p = new Array(105).fill(0x54);
+  p[0] = 0x53; p[1] = 0x00; p[2] = 0x05;  /* ПП 05 */
+  p[3] = 0x07;                             /* 03: цифра 7 */
+  p[4] = 0x50;                             /* 04: С/П */
+  p[5] = 0x02;                             /* 05: цифра 2 */
+  p[6] = 0x52;                             /* 06: В/О -> возврат на 03 */
+  return p;
+}
+
+function runCase(factory, prog, limit) {
   var core = factory(OPTS);
-  core.setProgram(buildProgram());
+  core.setProgram(prog);
   var res = core.run(limit || 200);
   return {
     x: core.ST.X,
@@ -58,15 +72,14 @@ function runCase(factory, limit) {
   };
 }
 
-var withoutFix = runCase(MKCore.__origCreate, 200);
-var withFix = runCase(MKCore.create, 200);
+var withoutFix = runCase(MKCore.__origCreate, progVo(), 200);
+var withFix = runCase(MKCore.create, progVo(), 200);
 
 var okOld = (withoutFix.steps >= 200);
 var okNew = (withFix.x === 7 && withFix.ip === 2 && withFix.result === 'stop');
 
 function row(title, r, good) {
-  var cls = good ? 'good' : 'bad';
-  return '<tr class="' + cls + '">' +
+  return '<tr class="' + (good ? 'good' : 'bad') + '">' +
     '<td>' + title + '</td>' +
     '<td class="num">' + r.x + '</td>' +
     '<td class="num">' + r.ip + '</td>' +
@@ -88,7 +101,8 @@ h += '<table>' +
 h += '<div class="box big">' +
   (okNew
     ? '<b>Ревизия 8 работает:</b> В/О на пустом стеке ушла на адрес 01, X = 7, остановка на С/П (адрес 02).'
-    : '<b>Слой не сработал:</b> ожидалось X = 7 и остановка на адресе 02, получено X = ' + withFix.x + ', ip = ' + withFix.ip + '.') +
+    : '<b>Слой не сработал:</b> ожидалось X = 7 и остановка на адресе 02, получено X = ' +
+      withFix.x + ', ip = ' + withFix.ip + ', итог ' + withFix.result + '.') +
   '</div>';
 
 h += '<h2>Что видно в строках</h2>';
@@ -96,7 +110,7 @@ h += '<div class="box">' +
   '<div>• <b>Без слоя</b>: ' + withoutFix.steps + ' шагов, X = ' + withoutFix.x +
   ' — программа зациклилась на адресе 00, как и описано в расхождении.</div>' +
   '<div>• <b>Со слоем</b>: ' + withFix.steps + ' шагов, X = ' + withFix.x +
-  ', остановка на адресе ' + withFix.ip + ' — ровно ' + 'БП 01' + '.</div>' +
+  ', остановка на адресе ' + withFix.ip + ' — это и есть «В/О = БП 01».</div>' +
   '</div>';
 
 h += '<h2>Проверка, что слой не ломает обычный возврат</h2>';
@@ -104,29 +118,21 @@ h += '<div id="pp"></div>';
 
 document.getElementById('out').innerHTML = h;
 
-/* Второй контроль: ПП / В/О с непустым стеком должен вернуться как раньше. */
+/* Второй контроль: ПП 05 / В/О с непустым стеком должен вернуться на 03. */
 (function () {
-  var p = new Array(105).fill(0x54);
-  p[0] = 0x53; p[1] = 0x05; p[2] = 0x00;  /* 00: ПП 05 */
-  p[3] = 0x07;                             /* 03: цифра 7 */
-  p[4] = 0x50;                             /* 04: С/П */
-  p[5] = 0x02;                             /* 05: цифра 2 */
-  p[6] = 0x52;                             /* 06: В/О -> возврат на 03 */
-
-  var core = MKCore.create(OPTS);
-  core.setProgram(p);
-  var res = core.run(200);
-  var good = (res.steps < 200 && core.ST.ip === 4 && res.result === 'stop');
+  var r = runCase(MKCore.create, progPp(), 200);
+  var good = (r.steps < 200 && r.ip === 4 && r.result === 'stop' && r.x === 7);
 
   document.getElementById('pp').innerHTML =
     '<table><tr><th>Прогон</th><th>X</th><th>ip</th><th>Шагов</th><th>Итог</th><th>Вывод</th></tr>' +
     '<tr class="' + (good ? 'good' : 'bad') + '">' +
     '<td>ПП 05 → В/О → С/П</td>' +
-    '<td class="num">' + core.ST.X + '</td>' +
-    '<td class="num">' + core.ST.ip + '</td>' +
-    '<td class="num">' + res.steps + '</td>' +
-    '<td>' + res.result + '</td>' +
-    '<td>' + (good ? '✔ возврат работает' : '✘ возврат сломан') + '</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.ip + '</td>' +
+    '<td class="num">' + r.steps + '</td>' +
+    '<td>' + r.result + '</td>' +
+    '<td>' + (good ? '✔ возврат работает, ожидание 7 / адрес 04' :
+      '✘ ожидалось 7 / адрес 04, получено ' + r.x + ' / ' + r.ip) + '</td>' +
     '</tr></table>';
 })();
 </script>
