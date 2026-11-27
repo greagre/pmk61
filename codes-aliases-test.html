@@ -25,8 +25,9 @@
 </head>
 <body>
 <h1>Проверка синонимов команд</h1>
-<div class="sub">Проверяет codes-aliases.js: разбор программ, записанных чужими обозначениями —
-  ИП, X#0, 10**X, KB, L2, CX, +/-. Коды берутся из нашей таблицы, а не из чужой.</div>
+<div class="sub">Проверяет codes-aliases.js v2: разбор программ, записанных чужими обозначениями —
+  ИП, X#0, 10**X, KB, L2, CX, +/-. Коды берутся из нашей таблицы, а не из чужой.
+  Отдельно — аргументные формы: ИП2, ИП 3, XП4.</div>
 <div class="sum" id="sum">…</div>
 <ol id="list"></ol>
 <div class="skip" id="skip"></div>
@@ -35,7 +36,7 @@
 <script src="disasm61.js?v=8"></script>
 <script src="codes-panel.js?v=2"></script>
 <script src="codes-names-fix.js?v=1"></script>
-<script src="codes-aliases.js?v=1"></script>
+<script src="codes-aliases.js?v=2"></script>
 <script>
 (function () {
   var P = window.MKCodePanel;
@@ -93,12 +94,16 @@
     return;
   }
 
+  /* --- главное: аргументные формы (v2) --- */
   check('ИП2 узнаётся и даёт код 62', codeOf('ИП2') === 0x62,
     'получено ' + hex(codeOf('ИП2')));
   check('Пх2 узнаётся и даёт тот же код', codeOf('Пх2') === 0x62,
     'получено ' + hex(codeOf('Пх2')));
   check('ИП с пробелом: «ИП 3» — код 63', codeOf('ИП 3') === 0x63,
     'получено ' + hex(codeOf('ИП 3')));
+  check('ИП→X4 = П→X4', same('ИП→X4', 'П→X4'), hex(codeOf('ИП→X4')));
+  check('XП4 = X→П4', same('XП4', 'X→П4'), hex(codeOf('XП4')));
+  check('ИПe = П→Xe', same('ИПe', 'П→Xe'), hex(codeOf('ИПe')));
 
   var prog = codesOf('ИП2 ИП3 − ИП4 ÷ С/П');
   var want = [0x62, 0x63, 0x11, 0x64, 0x13, 0x50];
@@ -127,6 +132,7 @@
 
   check('L0 = F L0', same('L0', 'F L0'), hex(codeOf('L0')));
   check('L2 узнаётся', codeOf('L2') >= 0, hex(codeOf('L2')));
+  check('L3 узнаётся', codeOf('L3') >= 0, hex(codeOf('L3')));
   check('CX = Cx', same('CX', 'Cx'), hex(codeOf('CX')));
   check('+/- = /-/', same('+/-', '/-/'), hex(codeOf('+/-')));
   check('B↑ = В↑', same('B↑', 'В↑'), hex(codeOf('B↑')));
@@ -137,11 +143,13 @@
   check('ЧM = К Ч→М', same('ЧM', 'К Ч→М'), hex(codeOf('ЧM')));
 
   check('П→X2 по-прежнему 62 (регрессия)', codeOf('П→X2') === 0x62, hex(codeOf('П→X2')));
+  check('П→Xe по-прежнему (регрессия)', codeOf('П→Xe') >= 0, hex(codeOf('П→Xe')));
   check('С/П по-прежнему 50', codeOf('С/П') === 0x50, hex(codeOf('С/П')));
   check('К 1 по-прежнему 55', codeOf('К 1') === 0x55, hex(codeOf('К 1')));
 
   check('групп синонимов больше 30', !!A && A.groups > 30, A ? 'групп ' + A.groups : 'нет слоя');
   check('добавлено больше 100 ключей', !!A && A.added > 100, A ? 'ключей ' + A.added : 'нет слоя');
+  check('аргументных ключей больше 50', !!A && A.args > 50, A ? 'их ' + A.args : 'нет слоя');
   check('все группы найдены в нашей карте', !!A && A.skipped.length === 0,
     A ? 'не найдено: ' + A.skipped.length : 'нет слоя');
 
