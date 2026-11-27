@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>В/О на пустом стеке · pmk61</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#111;color:#ddd}
+  h1{font-size:17px;margin:0 0 4px}
+  p.note{font-size:12px;color:#888;margin:0 0 12px}
+  h2{font-size:14px;margin:16px 0 6px;color:#8fc}
+  table{border-collapse:collapse;width:100%;font-size:12px;font-family:ui-monospace,monospace}
+  th,td{border:1px solid #333;padding:3px 6px;text-align:left;white-space:nowrap}
+  th{background:#1d1d1d;color:#aaa;font-weight:normal}
+  td.num{text-align:right}
+  tr.bad td{color:#f88}
+  tr.good td{color:#8f8}
+  .box{border:1px solid #333;border-radius:8px;padding:8px 10px;margin:10px 0}
+  .big{font-size:13px}
+  code{font-family:ui-monospace,monospace;color:#cfa}
+</style>
+</head>
+<body>
+<h1>В/О на пустом стеке — проверка ревизии 8</h1>
+<p class="note">Программа: адрес 00 — В/О (код 52), адрес 01 — цифра 7 (код 07), адрес 02 — С/П (код 50).
+По руководству В/О на нулевом стеке — это БП 01, значит X = 7 и остановка на адресе 02.</p>
+
+<div id="out"></div>
+
+<script src="core.js"></script>
+<script src="vo-fix.js"></script>
+<script>
+var OPTS = {
+  progLen: 105, regCount: 15, nop: 0x54, maxDig: 8,
+  hasK: true, addrHigh: true, addrHighFirst: 100, addrHighLast: 104
+};
+
+/* 00: В/О, 01: цифра 7, 02: С/П, остальное — К НОП (0x54) */
+function buildProgram() {
+  var p = new Array(105).fill(0x54);
+  p[0] = 0x52;
+  p[1] = 0x07;
+  p[2] = 0x50;
+  return p;
+}
+
+function runCase(factory, limit) {
+  var core = factory(OPTS);
+  core.setProgram(buildProgram());
+  var res = core.run(limit || 200);
+  return {
+    x: core.ST.X,
+    ip: core.ST.ip,
+    steps: res.steps,
+    result: res.result,
+    err: res.err,
+    sub: core.ST.sub.length
+  };
+}
+
+var withoutFix = runCase(MKCore.__origCreate, 200);
+var withFix = runCase(MKCore.create, 200);
+
+var okOld = (withoutFix.steps >= 200);
+var okNew = (withFix.x === 7 && withFix.ip === 2 && withFix.result === 'stop');
+
+function row(title, r, good) {
+  var cls = good ? 'good' : 'bad';
+  return '<tr class="' + cls + '">' +
+    '<td>' + title + '</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.ip + '</td>' +
+    '<td class="num">' + r.steps + '</td>' +
+    '<td>' + r.result + '</td>' +
+    '<td class="num">' + r.sub + '</td>' +
+    '<td>' + (good ? '✔ как должно' : '✘ расхождение') + '</td>' +
+    '</tr>';
+}
+
+var h = '';
+h += '<h2>Результат</h2>';
+h += '<table>' +
+  '<tr><th>Прогон</th><th>X</th><th>ip</th><th>Шагов</th><th>Итог</th><th>Стек</th><th>Вывод</th></tr>' +
+  row('core.js без слоя', withoutFix, okOld) +
+  row('core.js + vo-fix.js', withFix, okNew) +
+  '</table>';
+
+h += '<div class="box big">' +
+  (okNew
+    ? '<b>Ревизия 8 работает:</b> В/О на пустом стеке ушла на адрес 01, X = 7, остановка на С/П (адрес 02).'
+    : '<b>Слой не сработал:</b> ожидалось X = 7 и остановка на адресе 02, получено X = ' + withFix.x + ', ip = ' + withFix.ip + '.') +
+  '</div>';
+
+h += '<h2>Что видно в строках</h2>';
+h += '<div class="box">' +
+  '<div>• <b>Без слоя</b>: ' + withoutFix.steps + ' шагов, X = ' + withoutFix.x +
+  ' — программа зациклилась на адресе 00, как и описано в расхождении.</div>' +
+  '<div>• <b>Со слоем</b>: ' + withFix.steps + ' шагов, X = ' + withFix.x +
+  ', остановка на адресе ' + withFix.ip + ' — ровно ' + 'БП 01' + '.</div>' +
+  '</div>';
+
+h += '<h2>Проверка, что слой не ломает обычный возврат</h2>';
+h += '<div id="pp"></div>';
+
+document.getElementById('out').innerHTML = h;
+
+/* Второй контроль: ПП / В/О с непустым стеком должен вернуться как раньше. */
+(function () {
+  var p = new Array(105).fill(0x54);
+  p[0] = 0x53; p[1] = 0x05; p[2] = 0x00;  /* 00: ПП 05 */
+  p[3] = 0x07;                             /* 03: цифра 7 */
+  p[4] = 0x50;                             /* 04: С/П */
+  p[5] = 0x02;                             /* 05: цифра 2 */
+  p[6] = 0x52;                             /* 06: В/О -> возврат на 03 */
+
+  var core = MKCore.create(OPTS);
+  core.setProgram(p);
+  var res = core.run(200);
+  var good = (res.steps < 200 && core.ST.ip === 4 && res.result === 'stop');
+
+  document.getElementById('pp').innerHTML =
+    '<table><tr><th>Прогон</th><th>X</th><th>ip</th><th>Шагов</th><th>Итог</th><th>Вывод</th></tr>' +
+    '<tr class="' + (good ? 'good' : 'bad') + '">' +
+    '<td>ПП 05 → В/О → С/П</td>' +
+    '<td class="num">' + core.ST.X + '</td>' +
+    '<td class="num">' + core.ST.ip + '</td>' +
+    '<td class="num">' + res.steps + '</td>' +
+    '<td>' + res.result + '</td>' +
+    '<td>' + (good ? '✔ возврат работает' : '✘ возврат сломан') + '</td>' +
+    '</tr></table>';
+})();
+</script>
+</body>
+</html>
