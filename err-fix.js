@@ -24,6 +24,16 @@
    Поэтому ловушка применяется только к НЕпереходам; проверка
    идёт через MKCore.isJumpCmd.
 
+   Ревизия 2 (27.11.2026): ловушка срабатывала ДВАЖДЫ, и счётчик
+   уходил на адрес + 4. Причина — обёртка create навешивалась
+   повторно (файл подключён дважды либо стоит поверх другого слоя,
+   который тоже подменяет create). Тогда внешняя обёртка видела
+   уже сдвинутый внутренней ip и добавляла свои два.
+   Две страховки:
+     1) core.__errFix — второй раз тот же экземпляр не оборачиваем;
+     2) сдвиг применяется только если ip с момента ошибки НЕ менялся
+        (ST.ip === ip0). Если его уже сдвинул другой слой — не трогаем.
+
    Место подключения: строго после nop-fix.js и ДО ui.js —
    ui.js забирает ядро через create один раз, и обёртка должна
    успеть встать раньше. Снимается удалением одной строки.
@@ -36,6 +46,12 @@
 
   global.MKCore.create = function (options) {
     var core = origCreate.apply(this, arguments);
+
+    /* Страховка 1: этот экземпляр уже обёрнут — второй раз не трогаем.
+       Иначе два слоя складывают по +2, и ip уходит на адрес + 4. */
+    if (core.__errFix) return core;
+    core.__errFix = true;
+
     var ST = core.ST;
     var LEN = core.PROG_LEN;
     var isJump = global.MKCore.isJumpCmd || function () { return false; };
@@ -47,9 +63,9 @@
       return typeof c === 'number' && !isJump(c);
     }
 
-    function skipTrap() {
+    function trap(ip0) {
       ST.X1 = ST.X;
-      ST.ip = ((ST.ip + 2) % LEN + LEN) % LEN;
+      ST.ip = ((ip0 + 2) % LEN + LEN) % LEN;
       ST.run = false;
     }
 
@@ -58,9 +74,9 @@
       var ip0 = ST.ip;
       var was = ST.err;
       var res = rawStep.apply(this, arguments);
-      if (!was && ST.err && res === 'error' && trapApplies(ip0)) {
-        ST.ip = ip0;
-        skipTrap();
+      /* Страховка 2: сдвигаем, только если счётчик всё ещё на месте ошибки. */
+      if (!was && ST.err && res === 'error' && ST.ip === ip0 && trapApplies(ip0)) {
+        trap(ip0);
       }
       return res;
     };
@@ -70,8 +86,9 @@
        из run поправляем то, что он оставил. */
     var rawRun = core.run;
     core.run = function () {
+      var ip0 = ST.ip;
       var res = rawRun.apply(this, arguments);
-      if (ST.err && trapApplies(ST.ip)) skipTrap();
+      if (ST.err && ST.ip === ip0 && trapApplies(ip0)) trap(ip0);
       return res;
     };
 
@@ -85,9 +102,8 @@
       var was = ST.err;
       var res = rawKey.apply(this, arguments);
       if (!was && ST.err) {
-        if (k && k.a === 'pp' && ST.mode === 'AUT' && trapApplies(ip0)) {
-          ST.ip = ip0;
-          skipTrap();
+        if (k && k.a === 'pp' && ST.mode === 'AUT' && ST.ip === ip0 && trapApplies(ip0)) {
+          trap(ip0);
         } else {
           ST.X1 = ST.X;
         }
