@@ -29,11 +29,12 @@
   li .m{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;opacity:.7;display:block}
   .yes{color:#17673a}
   .no{color:#a02b1e}
-  table{border-collapse:collapse;font-size:13px;margin-top:6px}
+  table{border-collapse:collapse;font-size:13px;margin-top:6px;width:100%}
   th,td{border:1px solid #d5d1c2;padding:4px 8px;text-align:left}
   th{background:#eceade;font-weight:600}
   td.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
   .warn{color:#a02b1e;font-weight:600}
+  .okc{color:#17673a;font-weight:600}
   a{color:#1a5fb4}
 </style>
 </head>
@@ -41,22 +42,23 @@
 <h1>Проверка синонимов команд</h1>
 <div class="sub">Проверяет codes-aliases.js: разбор программ, записанных чужими обозначениями —
   ИП, X#0, 10**X, KB, L2, CX, +/-. Коды берутся из нашей таблицы, а не из чужой.
-  Отдельно — аргументные формы: ИП2, ИП 3, XП4, ИП→X4.</div>
+  Отдельно — аргументные формы (ИП2, ИП 3, XП4, ИП→X4) и честные коды логических К-команд
+  (37/38/39/3A), а не сравнение команды с самой собой.</div>
 <div class="sum" id="sum">…</div>
 <div class="diag" id="diag">…</div>
 <div class="miss" id="miss"></div>
 <ol id="list"></ol>
 
 <h2>Что ядро говорит о кодах 37–3A</h2>
-<div class="sub" style="margin-bottom:6px">Если в средней колонке не К ∧ / К ∨ / К ⊕ / К ИНВ,
-  значит имя в карте ядра не совпадает с тем, что ждёт словарь.</div>
+<div class="sub" style="margin-bottom:6px">Средняя колонка — имя из ядра, оно должно совпадать
+  с эталоном словаря. Правая — код, который словарь выдаёт на чужое написание, и ожидание.</div>
 <table id="coreTab"><tbody></tbody></table>
 
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
 <script src="codes-panel.js?v=2"></script>
 <script src="codes-names-fix.js?v=1"></script>
-<script src="codes-aliases.js?v=3"></script>
+<script src="codes-aliases.js?v=4"></script>
 <script>
 (function () {
   var P = window.MKCodePanel;
@@ -120,7 +122,8 @@
       ' · групп ' + A.groups + ' из ' + A.total +
       ' · ключей ' + A.added +
       ' · аргументных ' + A.args +
-      ' · не найдено ' + (A.skipped ? A.skipped.length : 0);
+      ' · не найдено ' + (A.skipped ? A.skipped.length : 0) +
+      ' · конфликтов ' + (A.conflicts ? A.conflicts.length : 0);
   }
 
   /* ---------- заметный список нераспознанного ---------- */
@@ -159,9 +162,16 @@
 
   /* ---------- таблица кодов 37–3A ---------- */
   function showCore() {
-    var rows = [[0x37, 'KA'], [0x38, 'KB'], [0x39, 'KC'], [0x3A, 'KD'], [0x0D, '']];
+    /* [код, чужое написание, ожидаемый код или -1] */
+    var rows = [
+      [0x37, 'KA', 0x37],
+      [0x38, 'KB', 0x38],
+      [0x39, 'KC', 0x39],
+      [0x3A, 'KD', 0x3A],
+      [0x0D, '', -1]
+    ];
     var head = document.createElement('tr');
-    ['Код', 'Имя в ядре', 'Чужое написание', 'Код из него'].forEach(function (t) {
+    ['Код', 'Имя в ядре', 'Чужое написание', 'Код из него', 'Ожидание'].forEach(function (t) {
       var th = document.createElement('th');
       th.textContent = t;
       head.appendChild(th);
@@ -171,6 +181,7 @@
     for (var i = 0; i < rows.length; i++) {
       var c = rows[i][0];
       var alias = rows[i][1];
+      var want = rows[i][2];
       var tr = document.createElement('tr');
 
       var td1 = document.createElement('td');
@@ -193,17 +204,25 @@
 
       var td4 = document.createElement('td');
       td4.className = 'mono';
+      var got = -1;
       if (alias) {
-        var got = codeOf(alias);
+        got = codeOf(alias);
         td4.textContent = hex(got);
-        if (got >= 0 && got !== c) {
+        if (want >= 0 && got !== want) {
           td4.className = 'mono warn';
-          td4.textContent = hex(got) + ' ≠ ' + hex(c);
+          td4.textContent = hex(got) + ' ≠ ' + hex(want);
+        } else if (want >= 0) {
+          td4.className = 'mono okc';
         }
       } else {
         td4.textContent = '—';
       }
       tr.appendChild(td4);
+
+      var td5 = document.createElement('td');
+      td5.className = 'mono';
+      td5.textContent = want >= 0 ? hex(want) : '—';
+      tr.appendChild(td5);
 
       coreTab.appendChild(tr);
     }
@@ -237,16 +256,23 @@
   check('программа чужими обозначениями даёт 62 63 11 64 13 50', progOk,
     prog ? prog.map(hex).join(' ') : 'не разобрано');
 
-  check('K0 = К НОП', same('K0', 'К НОП'), hex(codeOf('K0')));
-  check('KB = К ∨', same('KB', 'К ∨'), hex(codeOf('KB')));
-  check('KA = К ∧', same('KA', 'К ∧'), hex(codeOf('KA')));
-  check('KC = К ⊕', same('KC', 'К ⊕'), hex(codeOf('KC')));
-  check('KD = К ИНВ', same('KD', 'К ИНВ'), hex(codeOf('KD')));
+  /* --- К-команды: честные коды, а не сравнение с самим собой --- */
+  check('K0 = К НОП — код 54', codeOf('K0') === 0x54, hex(codeOf('K0')));
+  check('KA = К ∧ — код 37', codeOf('KA') === 0x37, hex(codeOf('KA')));
+  check('KB = К ∨ — код 38', codeOf('KB') === 0x38, hex(codeOf('KB')));
+  check('KC = К ⊕ — код 39', codeOf('KC') === 0x39, hex(codeOf('KC')));
+  check('KD = К ИНВ — код 3A', codeOf('KD') === 0x3A, hex(codeOf('KD')));
+  check('KB не выдаёт 0D (прежняя ошибка)', codeOf('KB') !== 0x0D && codeOf('KB') >= 0,
+    'получено ' + hex(codeOf('KB')));
+  check('KB = К ∨ (оба написания совпали)', same('KB', 'К ∨'), hex(codeOf('KB')));
 
+  /* --- сравнения --- */
   check('X#0 = Fx≠0', same('X#0', 'Fx≠0'), hex(codeOf('X#0')));
   check('X!=0 = Fx≠0', same('X!=0', 'Fx≠0'), hex(codeOf('X!=0')));
   check('X>=0 = Fx≥0', same('X>=0', 'Fx≥0'), hex(codeOf('X>=0')));
   check('X<0 = Fx<0', same('X<0', 'Fx<0'), hex(codeOf('X<0')));
+  check('X#0 = X!=0 (регрессия решётки)', codeOf('X#0') === codeOf('X!=0'),
+    hex(codeOf('X#0')) + ' / ' + hex(codeOf('X!=0')));
 
   check('10**X = F10^x', same('10**X', 'F10^x'), hex(codeOf('10**X')));
   check('E^X = F e^x', same('E^X', 'F e^x'), hex(codeOf('E^X')));
@@ -275,6 +301,8 @@
   check('аргументных ключей больше 50', !!A && A.args > 50, A ? 'их ' + A.args : 'нет слоя');
   check('все группы найдены в нашей карте', !!A && A.skipped.length === 0,
     A ? 'не найдено: ' + A.skipped.length : 'нет слоя');
+  check('конфликтов ключей нет', !!A && A.conflicts.length === 0,
+    A ? 'конфликтов: ' + A.conflicts.length : 'нет слоя');
 
   showDiag();
   showMiss();
