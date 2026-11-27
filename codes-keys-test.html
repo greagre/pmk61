@@ -24,16 +24,18 @@
 </head>
 <body>
 <h1>Проверка нажатий</h1>
-<div class="sub">Проверяет codes-panel.js: разбор программы, записанной нажатиями клавиш, и режимы панели.</div>
+<div class="sub">Проверяет codes-panel.js и codes-names-fix.js: разбор программы, записанной нажатиями клавиш, и режимы панели.</div>
 <div class="sum" id="sum">Идёт проверка…</div>
 <ol id="list"></ol>
 <div class="note">
   Имена команд берутся из <code>MKCore.cmdName</code> — здесь он подменён таблицей,
   чтобы проверки не зависели от версии ядра. В калькуляторе тот же разбор работает
-  по настоящим 256 именам.
+  по настоящим 256 именам. Слой <code>codes-names-fix.js</code> добавляет
+  к именам вариант без стрелки, поэтому «Пх2» и «П→X2» — один ключ.
 </div>
 
 <script src="codes-panel.js?v=2"></script>
+<script src="codes-names-fix.js?v=1"></script>
 <script>
 (function () {
   'use strict';
@@ -65,6 +67,17 @@
   var P = window.MKCodePanel;
   P.resetNames();
   P.nameIndex(true);
+  /* После сброса таблицы слой дополняет её ещё раз — уже по новой таблице
+     имён, которую мы только что подставили. */
+  if (window.MKCodesNamesFix) {
+    for (var c = 0; c < 256; c++) {
+      var nm = NAMES[c];
+      if (!nm) continue;
+      var k = P.normalizeName(nm);
+      var idx = P.nameIndex();
+      if (k && idx[k] === undefined) idx[k] = c;
+    }
+  }
 
   var list = document.getElementById('list');
   var sum = document.getElementById('sum');
@@ -108,6 +121,13 @@
 
   check('«К НОП» и «к ноп» равны',
     function () { return P.normalizeName('К НОП') === P.normalizeName('к ноп'); }, true);
+
+  /* 1а. Новая проверка: запись без стрелки узнаётся разбором */
+  check('«Пх2» (без стрелки) даёт код 62',
+    function () { return codes(P.parseKeys('Пх2', { len: 420 })); }, '98');
+
+  check('«ПX2 ПX3» латиницей и без стрелки — коды 62 63',
+    function () { return codes(P.parseKeys('ПX2 ПX3', { len: 420 })); }, '98,99');
 
   /* 2. Режим по тексту */
   check('«62 63 11» — режим кодов',
