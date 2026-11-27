@@ -1,5 +1,5 @@
 /* =========================================================
-   pmk61 / codes-aliases.js  (v1, 27.11.2026)
+   pmk61 / codes-aliases.js  (v2, 27.11.2026)
 
    СЛОЙ: СИНОНИМЫ ИМЁН КОМАНД ИЗ ЧУЖИХ ЛИСТИНГОВ
 
@@ -27,6 +27,23 @@
    пропускается целиком и попадает в отчёт skipped. Так в отчёт
    уходят недокументированные команды чужой машины (3C, 3D, 2B,
    4F…FF), которых у нас нет и не будет.
+
+   ЧТО НОВОГО В v2
+
+   Аргументные команды. «ИП2» — это одна команда с аргументом,
+   а не имя «ИП» плюс отдельная цифра. В v1 в карту попадал только
+   ключ «ип» (без цифры), поэтому слипшееся «ИП2» и раздельное
+   «ИП 3» не узнавались, а в программе терялись сразу две команды.
+
+   Теперь для каждой формы имени и каждой цифры 0…E строится
+   отдельный ключ:
+
+       ип2 → код «П→X2»      хп2 → код «X→П2»
+       ип3 → код «П→X3»      пх3 → код «П→X3»
+
+   Код берётся не арифметикой (+n), а из нашей же карты: эталон
+   ищется по имени, которое печатает ядро («П→X2»). Так слой
+   не зависит от того, как расположены коды в памяти.
 
    КАК ПОПАДАЕТ В РАЗБОР
 
@@ -166,6 +183,24 @@
     ['KПx', 'KПX', 'KП→x', 'KП→X', 'KИП']
   ];
 
+  /* ---------- аргументные команды (v2) ---------- */
+
+  /* Имя, после которого идёт цифра регистра/адреса.
+     etalon — то, как эту команду печатает наше ядро; по нему ищем код
+     в карте, поэтому арифметика «база + n» не нужна. */
+  var ARG_SETS = [
+    { etalon: 'П→X', forms: ['П→X', 'Пx', 'ПX', 'ИП'] },        /* 60…6E */
+    { etalon: 'X→П', forms: ['X→П', 'XП', 'ХП'] },              /* 40…4E */
+    { etalon: 'Kx≠0', forms: ['Kx≠0', 'KX≠0', 'KX#0', 'KX!=0',
+                              'KX<>0', 'KX≠O', 'KX#O', 'KX!=O', 'KX<>O'] },
+    { etalon: 'Kx≥0', forms: ['Kx≥0', 'KX≥0', 'KX⩾0', 'KX>=0'] },
+    { etalon: 'Kx<0', forms: ['Kx<0', 'KX<0'] },
+    { etalon: 'Kx=0', forms: ['Kx=0', 'KX=0'] },
+    { etalon: 'F L', forms: ['F L', 'FL', 'L'] }
+  ];
+
+  var HEXDIG = '0123456789ABCDE'.split('');
+
   /* ---------- ключи ---------- */
 
   /* Копия normalizeName из codes-panel.js. Нужна точь-в-точь: внутренний
@@ -209,10 +244,15 @@
     return baseNorm(pre(s));
   }
 
+  function put(map, key, code, stats) {
+    if (!key) return;
+    if (map[key] === undefined) { map[key] = code; stats.added++; }
+  }
+
   /* ---------- построение ---------- */
 
   var map = P.nameIndex();
-  var stats = { groups: 0, added: 0, skipped: [], total: GROUPS.length };
+  var stats = { groups: 0, added: 0, skipped: [], total: GROUPS.length, args: 0 };
 
   if (map) {
     for (var i = 0; i < GROUPS.length; i++) {
@@ -234,18 +274,37 @@
       for (j = 0; j < g.length; j++) {
         k1 = baseNorm(g[j]);
         k2 = normKey(g[j]);
-        if (k1 && map[k1] === undefined) { map[k1] = code; stats.added++; }
-        if (k2 && k2 !== k1 && map[k2] === undefined) { map[k2] = code; stats.added++; }
+        put(map, k1, code, stats);
+        if (k2 !== k1) put(map, k2, code, stats);
+      }
+    }
+
+    /* v2: имя + цифра 0…E для аргументных команд */
+    for (var s = 0; s < ARG_SETS.length; s++) {
+      var set = ARG_SETS[s];
+      for (var d = 0; d < HEXDIG.length; d++) {
+        var dig = HEXDIG[d];
+        var refCode = map[baseNorm(set.etalon + dig)];
+        if (refCode === undefined) continue;
+        for (var f = 0; f < set.forms.length; f++) {
+          var key = baseNorm(set.forms[f] + dig);
+          if (key && map[key] === undefined) {
+            map[key] = refCode;
+            stats.added++;
+            stats.args++;
+          }
+        }
       }
     }
   }
 
   global.MKCodesAliases = {
-    version: 1,
+    version: 2,
     normKey: normKey,
     baseNorm: baseNorm,
     groups: stats.groups,
     added: stats.added,
+    args: stats.args,
     total: stats.total,
     skipped: stats.skipped,
     index: function () { return P.nameIndex(); }
