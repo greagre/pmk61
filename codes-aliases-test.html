@@ -9,41 +9,62 @@
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:16px;
        background:#f4f2ea;color:#222;line-height:1.5}
   h1{font-size:19px;margin:0 0 6px}
+  h2{font-size:15px;margin:18px 0 6px}
   .sub{font-size:13px;opacity:.75;margin-bottom:14px}
-  .sum{padding:10px 12px;border-radius:10px;font-weight:600;font-size:14px;margin-bottom:14px}
+  .sum{padding:10px 12px;border-radius:10px;font-weight:600;font-size:14px;margin-bottom:10px}
   .sum.ok{background:#e2f5e8;color:#17673a}
   .sum.err{background:#fde6e4;color:#a02b1e}
+  .diag{padding:8px 12px;border-radius:10px;background:#eceade;font-size:12px;
+        font-family:ui-monospace,Menlo,Consolas,monospace;margin-bottom:12px;
+        word-break:break-word}
+  .miss{padding:10px 12px;border-radius:10px;font-size:13px;margin:0 0 14px}
+  .miss.good{background:#e2f5e8;color:#17673a}
+  .miss.bad{background:#fdf1d8;color:#7a5310}
+  .miss b{display:block;margin-bottom:6px}
+  .miss ul{margin:6px 0 0;padding-left:20px}
+  .miss li{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;margin:3px 0}
+  .miss .hint{display:block;margin-top:8px;font-size:12px;opacity:.85}
   ol{margin:0;padding-left:22px}
   li{margin:7px 0;font-size:14px}
   li .m{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;opacity:.7;display:block}
   .yes{color:#17673a}
   .no{color:#a02b1e}
-  .skip{margin-top:16px;font-size:12px;opacity:.75;font-family:ui-monospace,Menlo,Consolas,monospace;
-        word-break:break-word}
+  table{border-collapse:collapse;font-size:13px;margin-top:6px}
+  th,td{border:1px solid #d5d1c2;padding:4px 8px;text-align:left}
+  th{background:#eceade;font-weight:600}
+  td.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
   a{color:#1a5fb4}
 </style>
 </head>
 <body>
 <h1>Проверка синонимов команд</h1>
-<div class="sub">Проверяет codes-aliases.js v2: разбор программ, записанных чужими обозначениями —
+<div class="sub">Проверяет codes-aliases.js: разбор программ, записанных чужими обозначениями —
   ИП, X#0, 10**X, KB, L2, CX, +/-. Коды берутся из нашей таблицы, а не из чужой.
-  Отдельно — аргументные формы: ИП2, ИП 3, XП4.</div>
+  Отдельно — аргументные формы: ИП2, ИП 3, XП4, ИП→X4.</div>
 <div class="sum" id="sum">…</div>
+<div class="diag" id="diag">…</div>
+<div class="miss" id="miss"></div>
 <ol id="list"></ol>
-<div class="skip" id="skip"></div>
+
+<h2>Что ядро говорит о кодах 37–3A</h2>
+<div class="sub" style="margin-bottom:6px">Прямая проверка таблицы ядра: если здесь не
+  К ∧ / К ∨ / К ⊕ / К ИНВ, значит словарь команд не совпадает с картой.</div>
+<table id="coreTab"><tbody></tbody></table>
 
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
 <script src="codes-panel.js?v=2"></script>
 <script src="codes-names-fix.js?v=1"></script>
-<script src="codes-aliases.js?v=2"></script>
+<script src="codes-aliases.js?v=3"></script>
 <script>
 (function () {
   var P = window.MKCodePanel;
   var A = window.MKCodesAliases;
   var list = document.getElementById('list');
   var sum = document.getElementById('sum');
-  var skipBox = document.getElementById('skip');
+  var diag = document.getElementById('diag');
+  var miss = document.getElementById('miss');
+  var coreTab = document.getElementById('coreTab').getElementsByTagName('tbody')[0];
   var total = 0, pass = 0;
 
   function check(name, ok, more) {
@@ -88,13 +109,98 @@
     return ca >= 0 && ca === cb;
   }
 
+  /* ---------- диагностика словаря ---------- */
+  function showDiag() {
+    if (!A) {
+      diag.textContent = 'Слой codes-aliases.js не загрузился — словарь синонимов отсутствует.';
+      return;
+    }
+    diag.textContent = 'Словарь v' + (A.version || '?') +
+      ' · групп ' + A.groups + ' из ' + A.total +
+      ' · ключей ' + A.added +
+      ' · аргументных ' + A.args +
+      ' · не найдено ' + (A.skipped ? A.skipped.length : 0);
+  }
+
+  /* ---------- заметный список нераспознанного ---------- */
+  function showMiss() {
+    if (!A) {
+      miss.className = 'miss bad';
+      miss.textContent = 'Слой синонимов не загрузился, проверить нечего.';
+      return;
+    }
+    var sk = A.skipped || [];
+    if (!sk.length) {
+      miss.className = 'miss good';
+      miss.textContent = 'Все группы синонимов привязаны к кодам нашей таблицы — ' +
+        'ни одна команда не потерялась.';
+      return;
+    }
+    miss.className = 'miss bad';
+    miss.innerHTML = '';
+    var b = document.createElement('b');
+    b.textContent = 'Не найдено в нашей карте: ' + sk.length + ' групп' +
+      ' (эти написания панель не поймёт)';
+    miss.appendChild(b);
+    var ul = document.createElement('ul');
+    for (var i = 0; i < sk.length; i++) {
+      var li = document.createElement('li');
+      li.textContent = sk[i];
+      ul.appendChild(li);
+    }
+    miss.appendChild(ul);
+    var hint = document.createElement('span');
+    hint.className = 'hint';
+    hint.textContent = 'Такое бывает, когда команда в ядре ещё не реализована ' +
+      'или называется иначе. Список — то, что стоит дописать в таблицу имён.';
+    miss.appendChild(hint);
+  }
+
+  /* ---------- таблица кодов 37–3A ---------- */
+  function showCore() {
+    var codes = [0x37, 0x38, 0x39, 0x3A, 0x0D];
+    var head = document.createElement('tr');
+    ['Код', 'Имя в ядре', 'Разбор как «К ∧»', 'Разбор как «К ∨»'].forEach(function (t) {
+      var th = document.createElement('th');
+      th.textContent = t;
+      head.appendChild(th);
+    });
+    coreTab.appendChild(head);
+    for (var i = 0; i < codes.length; i++) {
+      var c = codes[i];
+      var tr = document.createElement('tr');
+      var td1 = document.createElement('td');
+      td1.className = 'mono';
+      td1.textContent = hex(c);
+      tr.appendChild(td1);
+      var td2 = document.createElement('td');
+      var nm = '—';
+      try {
+        if (window.MKCore && MKCore.cmdName) nm = MKCore.cmdName(c) || '—';
+      } catch (e) { nm = '—'; }
+      td2.textContent = nm;
+      tr.appendChild(td2);
+      var td3 = document.createElement('td');
+      td3.className = 'mono';
+      td3.textContent = hex(codeOf('K' + String.fromCharCode(65 + (c - 0x37))));
+      tr.appendChild(td3);
+      var td4 = document.createElement('td');
+      td4.className = 'mono';
+      td4.textContent = '';
+      tr.appendChild(td4);
+      coreTab.appendChild(tr);
+    }
+  }
+
   if (!P) {
     sum.className = 'sum err';
     sum.textContent = 'Панель кодов не загрузилась — проверь codes-panel.js';
+    showDiag();
+    showMiss();
     return;
   }
 
-  /* --- главное: аргументные формы (v2) --- */
+  /* --- главное: аргументные формы --- */
   check('ИП2 узнаётся и даёт код 62', codeOf('ИП2') === 0x62,
     'получено ' + hex(codeOf('ИП2')));
   check('Пх2 узнаётся и даёт тот же код', codeOf('Пх2') === 0x62,
@@ -153,11 +259,9 @@
   check('все группы найдены в нашей карте', !!A && A.skipped.length === 0,
     A ? 'не найдено: ' + A.skipped.length : 'нет слоя');
 
-  if (A && A.skipped && A.skipped.length) {
-    skipBox.textContent = 'Не нашлось в нашей карте (пропущены целиком): ' + A.skipped.join(' · ');
-  } else {
-    skipBox.textContent = 'Все группы привязаны к кодам нашей таблицы.';
-  }
+  showDiag();
+  showMiss();
+  showCore();
 
   sum.className = 'sum ' + (pass === total ? 'ok' : 'err');
   sum.textContent = pass + ' из ' + total + (pass === total ? ' — всё зелёное' : ' — есть красные');
