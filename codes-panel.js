@@ -1,5 +1,5 @@
 /* =========================================================
-   pmk61 / codes-panel.js  (v2, 27.11.2026)
+   pmk61 / codes-panel.js  (v3, 27.11.2026)
 
    ПАНЕЛЬ «КОДЫ МК» — вставка программы кодами и нажатиями
 
@@ -11,14 +11,30 @@
    языка — а рядом показывает таблицу «адрес · код · нажатие», чтобы
    соответствие было видно, а не угадывалось.
 
-   ЧТО НОВОГО В v2
+   ЧТО НОВОГО В v3
+
+     • Многоразрядные числа. В режиме нажатий токен из одних цифр —
+       это ЧИСЛО, а не код: «1234» разворачивается в 01 02 03 04,
+       «3.14» — в 03 0A 01 04, «0,5» — в 00 0A 05. Раньше двузначный
+       токен молча становился кодом: «10» превращалось в «+» (0x10),
+       и программа считала не то.
+     • Код в режиме нажатий пишется явно: 0x62 или #62. Так можно
+       смешивать коды и команды без догадок.
+     • Чисто числовой текст (ни букв, ни знаков операций) по-прежнему
+       читается КАК КОДЫ: вставка «62 63 11 64 13 50» из журнала
+       работает как раньше.
+     • Надпись после «В память» больше не теряется: статус ставится
+       ДО загрузки, потом повторяется на следующем такте, дублируется
+       подсказкой внизу, а любая ошибка показывается текстом.
+     • «Из памяти» переключает режим на «коды», «Нажатиями» — на
+       «нажатия»: обратная загрузка не превращает коды в цифры.
+
+   ЧТО БЫЛО В v2
 
      • режим «нажатия»: текст разбирается по именам команд ядра
        (MKCore.cmdName) — 256 кодов, обратная таблица строится на месте;
      • склейка токенов: «П→X 2», «К 1», «С / П» понимаются как одна
        команда, хотя написаны с пробелами;
-     • смешанный ввод: в режиме нажатий код, которого нет среди имён
-       (например «10» — это «+»), принимается как код;
      • таблица соответствия под полем: адрес, код, нажатие;
      • переключатель режима: авто / коды / нажатия (в авто режим
        определяется по тексту).
@@ -30,15 +46,21 @@
    из ui.js чистит его через innerHTML = '', и всё положенное внутрь
    исчезло бы при первой перерисовке. Тот же приём, что у asm-editor.js.
 
-   КОДЫ ПИШУТСЯ ШЕСТНАДЦАТЕРИЧНЫМИ
+   ПРАВИЛА РАЗБОРА (режим «нажатия»)
 
-   «10» в режиме кодов это 0x10 = 16 (команда «+»), а не десять.
-   В режиме нажатий «10» тоже код, а «1 0» — две команды-цифры.
+     «8»      → одна цифра 08
+     «1234»   → 01 02 03 04 (число, разряды по одному)
+     «3.14»   → 03 0A 01 04 (0A — десятичная точка)
+     «0x62»   → код 62 (x→П 2)
+     «#62»    → то же самое
+     «.54»    → код 54 (К НОП, как пишет «В текст»)
+     «П→X2»   → по словарю имён ядра
 
    ЧИСТАЯ ЧАСТЬ
 
-   hex2, stripComments, tokens, num, parseCodes, buildFlat, toAsmText,
-   memCodes, normalizeName, detectMode, parseKeys, parseMixed
+   hex2, stripComments, tokens, num, dotCode, expandNumber,
+   parseCodes, buildFlat, toAsmText, memCodes, normalizeName,
+   detectMode, parseKeys, parseMixed
    не трогают DOM и проверяются codes-test.html и codes-keys-test.html.
    ========================================================= */
 (function (global) {
@@ -49,6 +71,7 @@
   var NOP = 0x54;
   var DEFAULT_LEN = 420;
   var nameCache = null;
+  var dotCache;
 
   /* ---------- чистая часть (проверяется страницами тестов) ---------- */
 
@@ -76,6 +99,39 @@
     var t = String(tok).toLowerCase();
     var v = (t.indexOf('0x') === 0) ? parseInt(t.slice(2), 16) : parseInt(t, 16);
     return isFinite(v) ? v : NaN;
+  }
+
+  /* Код десятичной точки. Берём у ядра, чтобы не разойтись с ним:
+     где-то это «•», где-то «.». Если имени не нашлось — 0x0A, как
+     в линии МК-61: 00…09 цифры, 0A точка. */
+  function dotCode() {
+    if (dotCache !== undefined) return dotCache;
+    dotCache = -1;
+    var MK = global.MKCore;
+    if (MK && typeof MK.cmdName === 'function') {
+      for (var c = 0; c < 256; c++) {
+        var nm = '';
+        try { nm = String(MK.cmdName(c) || '').trim(); } catch (e) { nm = ''; }
+        if (nm === '.' || nm === '•' || nm === ',') { dotCache = c; break; }
+      }
+    }
+    if (dotCache < 0) dotCache = 0x0A;
+    return dotCache;
+  }
+
+  /* Число → последовательность цифровых команд.
+     «1234» → [1,2,3,4]; «3.14» → [3, 0x0A, 1, 4]; «0,5» → [0, 0x0A, 5].
+     Возвращает null, если токен не похож на число. */
+  function expandNumber(tok) {
+    var t = String(tok == null ? '' : tok);
+    if (!/^(\d+([.,]\d*)?|[.,]\d+)$/.test(t)) return null;
+    var out = [];
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      if (ch >= '0' && ch <= '9') out.push(ch.charCodeAt(0) - 48);
+      else if (ch === '.' || ch === ',') out.push(dotCode());
+    }
+    return out.length ? out : null;
   }
 
   /* Латинские буквы, похожие на русские: человек пишет «Пx2» или «PX2»,
@@ -191,17 +247,23 @@
      «П→X 2» — два токена, а команда одна. Пробуем склейки до трёх
      токенов, потому что «К x≠0 7» тоже пишут с пробелами.
 
-     Если токен не имя, но похож на код (1–2 hex-разряда) — принимаем
-     его как код: так в одном тексте можно смешать «62» и «П→X4». */
+     Числа и коды различаются так:
+       • в тексте есть команды (буквы/знаки) — цифровые токены это
+         ЧИСЛА и разворачиваются по разрядам, а код пишется 0x62/#62;
+       • текст из одних hex-пар — это КОДЫ, как в журнале. */
   function parseKeys(text, opts) {
     var o = opts || {};
     var len = (o.len > 0) ? Math.round(o.len) : DEFAULT_LEN;
     var start = (typeof o.start === 'number' && o.start >= 0 && isFinite(o.start))
       ? Math.round(o.start) : 0;
     var raw = stripComments(text);
+    /* «3,14» — десятичное число, а не два: запятая между цифрами
+       становится точкой, разделителем остаётся запятая с пробелом. */
+    raw = String(raw).replace(/(\d),(\d)/g, '$1.$2');
     var parts = String(raw).split(/[\s,]+/).filter(function (t) { return t.length > 0; });
+    var hasWord = /[a-zа-яё]/i.test(raw) || /[+×÷↑→^*√−]/.test(raw);
     var map = nameIndex();
-    var res = { ok: true, errors: [], cells: [], count: 0, len: len, mode: 'keys' };
+    var res = { ok: true, errors: [], cells: [], count: 0, len: len, mode: 'keys', numbers: hasWord };
     var addr = start;
     var i = 0;
 
@@ -220,10 +282,42 @@
         }
       }
 
+      var tok = parts[i];
+      var bare = String(tok).replace(/^\./, '');
+
       if (!hit) {
-        var tok = parts[i];
-        var bare = String(tok).replace(/^\./, '');
-        if (/^(0x[0-9a-f]{1,2}|[0-9a-f]{1,2})$/i.test(bare)) {
+        if (/^\.[0-9a-f]{1,2}$/i.test(tok)) {
+          /* «.54» — так пишет кнопка «В текст»: код без догадок */
+          hit = { code: num(tok.slice(1)), text: tok };
+          used = 1;
+        } else if (/^(0x|#)/i.test(tok)) {
+          /* «0x62» или «#62» — явный код даже в режиме нажатий */
+          var cv = num(tok.replace(/^#/, '0x'));
+          if (cv >= 0 && cv <= 255) {
+            hit = { code: cv, text: tok };
+            used = 1;
+          } else {
+            res.errors.push('«' + tok + '» не код: нужно 0x00–0xFF');
+            i += 1;
+            continue;
+          }
+        } else if (hasWord) {
+          /* В тексте есть команды — значит цифры это ЧИСЛО. */
+          var nums = expandNumber(bare);
+          if (nums) {
+            if (addr + nums.length > len) {
+              res.errors.push('число «' + tok + '» не влезает: нужно ' + nums.length +
+                ' ячеек, а до конца памяти ' + (len - addr));
+            } else {
+              for (var q = 0; q < nums.length; q++) {
+                res.cells.push({ code: nums[q], addr: addr + q, text: 'цифра' });
+              }
+              addr += nums.length;
+            }
+            i += 1;
+            continue;
+          }
+        } else if (/^[0-9a-f]{1,2}$/i.test(bare)) {
           hit = { code: num(bare), text: tok };
           used = 1;
         }
@@ -446,6 +540,13 @@
     return modeSel ? modeSel.value : 'auto';
   }
 
+  function setModeSel(value) {
+    if (!modeSel) return;
+    if (modeSel.value === value) return;
+    modeSel.value = value;
+    saveMode();
+  }
+
   function showStat(text, kind) {
     if (!stat) return;
     stat.className = 'codes-stat' + (kind ? ' ' + kind : '');
@@ -511,35 +612,46 @@
   }
 
   function doMemory() {
-    var res = parseNow();
-    paintList(res);
-    if (!res.count) {
-      showStat('Нечего грузить: ' + (res.errors[0] || 'пусто'), 'err');
-      hint('Не разобрано — память не тронута.');
-      return res;
-    }
-    if (!res.ok) {
-      showStat('Не гружу: ' + res.errors[0], 'err');
-      hint('В программе есть ошибка: ' + res.errors[0] + '. Память не тронута.');
-      return res;
-    }
-    if (!global.MKUI || typeof global.MKUI.loadProgram !== 'function') {
-      showStat('Нет доступа к памяти: MKUI.loadProgram не найден', 'err');
-      return res;
-    }
-
-    var inf = info();
-    var flat = buildFlat(res.cells, inf.len, memFlat());
     try {
-      global.MKUI.loadProgram(flat, null, { title: res.chosen === 'keys' ? 'Из нажатий' : 'Из кодов' });
-    } catch (e) {
-      showStat('Память не приняла: ' + ((e && e.message) ? e.message : 'ошибка'), 'err');
+      showStat('Гружу в память…', '');
+      var res = parseNow();
+      paintList(res);
+      if (!res.count) {
+        showStat('Нечего грузить: ' + (res.errors[0] || 'пусто'), 'err');
+        hint('Не разобрано — память не тронута.');
+        return res;
+      }
+      if (!res.ok) {
+        showStat('Не гружу: ' + res.errors[0], 'err');
+        hint('В программе есть ошибка: ' + res.errors[0] + '. Память не тронута.');
+        return res;
+      }
+      if (!global.MKUI || typeof global.MKUI.loadProgram !== 'function') {
+        showStat('Нет доступа к памяти: MKUI.loadProgram не найден', 'err');
+        hint('Мост MKUI.loadProgram не найден. Обнови страницу.');
+        return res;
+      }
+
+      var inf = info();
+      var flat = buildFlat(res.cells, inf.len, memFlat());
+      global.MKUI.loadProgram(flat, null, {
+        title: res.chosen === 'keys' ? 'Из нажатий' : 'Из кодов'
+      });
+
+      var msg = describe(res) + ' · в памяти';
+      showStat(msg, 'ok');
+      /* Калькулятор перерисовывается внутри loadProgram. Если панель
+         пересоберётся, повторим надпись на следующем такте — она
+         не должна пропадать из-за чужой отрисовки. */
+      setTimeout(function () { showStat(msg, 'ok'); }, 0);
+      hint('Загружено: ' + res.count + ' яч., адреса ' + res.cells[0].addr +
+        '–' + res.cells[res.cells.length - 1].addr + '. Счётчик на 00 — жми «Пуск».');
+      toast(msg, 'ok');
       return res;
+    } catch (e) {
+      showStat('Сбой панели: ' + ((e && e.message) ? e.message : String(e)), 'err');
+      return null;
     }
-    showStat(describe(res) + ' · в памяти', 'ok');
-    hint('Загружено: ' + res.count + ' яч., адреса ' + res.cells[0].addr +
-      '–' + res.cells[res.cells.length - 1].addr + '. Жми «Пуск».');
-    return res;
   }
 
   function doAsmText() {
@@ -581,6 +693,9 @@
       parts.push(hex2(codes[i]));
       cells.push({ code: codes[i], addr: i });
     }
+    /* Панель отдаёт КОДЫ — и режим переводим в «коды», иначе повторное
+       «В память» прочитало бы «62» как число 6 и 2. */
+    setModeSel('codes');
     if (area) area.value = parts.join(' ');
     saveText();
     paintList({ cells: cells, count: cells.length, chosen: 'codes' });
@@ -608,10 +723,11 @@
       if (MK && typeof MK.cmdName === 'function') {
         try { nm = MK.cmdName(c) || ''; } catch (e) { nm = ''; }
       }
-      if (!nm || normalizeName(nm) === '') nm = hex2(c);
+      if (!nm || normalizeName(nm) === '') nm = '0x' + hex2(c);
       words.push(nm);
       cells.push({ code: c, addr: i });
     }
+    setModeSel('keys');
     if (area) area.value = words.join(' ');
     saveText();
     paintList({ cells: cells, count: cells.length, chosen: 'keys' });
@@ -634,7 +750,7 @@
     area = document.createElement('textarea');
     area.id = 'codesSrc';
     area.spellcheck = false;
-    area.placeholder = '62 63 11 64 13 50\nили: П→X2 П→X3 − П→X4 ÷ С/П';
+    area.placeholder = '62 63 11 64 13 50\nили: П→X2 П→X3 − П→X4 ÷ С/П\nили числом: 1234 X→П2 С/П';
     area.addEventListener('input', saveText);
     panel.appendChild(area);
 
@@ -712,8 +828,9 @@
     panel.appendChild(row);
 
     panel.appendChild(mk('div', 'asm-tip',
-      'Коды шестнадцатеричные: 62 63 11. Нажатия: П→X2 П→X3 − С/П. ' +
-      'Смешать можно. Адреса: [62,0] или 62:0. Комментарий: ;'));
+      'Коды: 62 63 11. Нажатия: П→X2 П→X3 − С/П. Числа: 10 → 1 и 0, ' +
+      '1234 → 1 2 3 4, 3.14 → 3 ⋅ 1 4. Код среди нажатий: 0x62 или #62. ' +
+      'Адреса: [62,0] или 62:0. Комментарий: ;'));
 
     listBox = mk('pre', 'codes-list');
     listBox.id = 'codesList';
@@ -748,6 +865,8 @@
     stripComments: stripComments,
     tokens: tokens,
     num: num,
+    dotCode: dotCode,
+    expandNumber: expandNumber,
     parseCodes: parseCodes,
     parseKeys: parseKeys,
     parseMixed: parseMixed,
@@ -759,7 +878,7 @@
     toAsmText: toAsmText,
     memCodes: memCodes,
     mount: mount,
-    resetNames: function () { nameCache = null; },
+    resetNames: function () { nameCache = null; dotCache = undefined; },
     NOP: NOP
   };
 
