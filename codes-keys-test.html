@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка нажатий — PMK-61</title>
+<style>
+  body{margin:0;padding:16px;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:#f4f1e8;color:#23201a}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{opacity:.7;font-size:13px;margin-bottom:14px}
+  .sum{padding:10px 12px;border-radius:10px;margin-bottom:14px;font-weight:600}
+  .sum.ok{background:#d9f2df;color:#17603a}
+  .sum.bad{background:#f7dcd9;color:#8f2a20}
+  ol{margin:0;padding-left:22px}
+  li{margin-bottom:9px}
+  li.ok{color:#1a7a45}
+  li.bad{color:#b03027}
+  .why{display:block;font-size:13px;opacity:.85;font-family:ui-monospace,Menlo,Consolas,monospace;
+       white-space:pre-wrap;margin-top:2px}
+  .note{margin-top:18px;font-size:13px;opacity:.75}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace}
+</style>
+</head>
+<body>
+<h1>Проверка нажатий</h1>
+<div class="sub">Проверяет codes-panel.js: разбор программы, записанной нажатиями клавиш, и режимы панели.</div>
+<div class="sum" id="sum">Идёт проверка…</div>
+<ol id="list"></ol>
+<div class="note">
+  Имена команд берутся из <code>MKCore.cmdName</code> — здесь он подменён таблицей,
+  чтобы проверки не зависели от версии ядра. В калькуляторе тот же разбор работает
+  по настоящим 256 именам.
+</div>
+
+<script src="codes-panel.js?v=2"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* Таблица имён — как у настоящего ядра, но короткая и предсказуемая. */
+  var NAMES = {};
+  for (var d = 0; d <= 9; d++) NAMES[d] = String(d);
+  NAMES[0x10] = '+';
+  NAMES[0x11] = '−';
+  NAMES[0x12] = '×';
+  NAMES[0x13] = '÷';
+  NAMES[0x14] = 'В↑';
+  NAMES[0x15] = 'Пх';
+  NAMES[0x37] = 'К ∧';
+  NAMES[0x50] = 'С/П';
+  NAMES[0x51] = 'БП';
+  NAMES[0x52] = 'В/О';
+  NAMES[0x54] = 'К НОП';
+  NAMES[0x55] = 'К 1';
+  NAMES[0x56] = 'К 2';
+  NAMES[0x62] = 'П→X2';
+  NAMES[0x63] = 'П→X3';
+  NAMES[0x64] = 'П→X4';
+
+  window.MKCore = {
+    cmdName: function (code) { return NAMES[code & 0xFF] || ''; },
+    NOP: 0x54
+  };
+  var P = window.MKCodePanel;
+  P.resetNames();
+  P.nameIndex(true);
+
+  var list = document.getElementById('list');
+  var sum = document.getElementById('sum');
+  var pass = 0, total = 0;
+
+  function codes(res) {
+    return res.cells.map(function (c) { return c.code; }).join(',');
+  }
+
+  function check(title, fn, want) {
+    total++;
+    var li = document.createElement('li');
+    var got, ok = false, err = null;
+    try { got = fn(); } catch (e) { err = e; }
+    if (err) {
+      ok = false;
+      got = 'исключение: ' + (err.message || err);
+    } else {
+      ok = (JSON.stringify(got) === JSON.stringify(want));
+    }
+    li.className = ok ? 'ok' : 'bad';
+    li.textContent = (ok ? '✔ ' : '✘ ') + title +
+      (ok ? '' : ' — ' + JSON.stringify(got));
+    if (!ok) {
+      var w = document.createElement('span');
+      w.className = 'why';
+      w.textContent = 'ждали: ' + JSON.stringify(want);
+      li.appendChild(w);
+    }
+    list.appendChild(li);
+    if (ok) pass++;
+    return ok;
+  }
+
+  /* 1. Нормализация имени */
+  check('«П→X2» и «Пx 2» приводятся к одному виду',
+    function () { return P.normalizeName('П→X2') === P.normalizeName('Пx 2'); }, true);
+
+  check('«С/П» и «C/П» (латинская C) дают одно и то же',
+    function () { return P.normalizeName('С/П') === P.normalizeName('C/П'); }, true);
+
+  check('«К НОП» и «к ноп» равны',
+    function () { return P.normalizeName('К НОП') === P.normalizeName('к ноп'); }, true);
+
+  /* 2. Режим по тексту */
+  check('«62 63 11» — режим кодов',
+    function () { return P.detectMode('62 63 11'); }, 'codes');
+
+  check('«П→X2 П→X3» — режим нажатий',
+    function () { return P.detectMode('П→X2 П→X3'); }, 'keys');
+
+  check('комментарий не включает режим нажатий',
+    function () { return P.detectMode('62 ; это П→X2'); }, 'codes');
+
+  /* 3. Главный пример из журнала */
+  check('нажатия дают коды 62 63 11 64 13 50',
+    function () {
+      return codes(P.parseKeys('П→X2 П→X3 − П→X4 ÷ С/П', { len: 420 }));
+    }, '98,99,17,100,19,80');
+
+  /* 4. Склейка через пробелы */
+  check('«С / П» склеивается в С/П (код 50)',
+    function () { return codes(P.parseKeys('С / П', { len: 420 })); }, '80');
+
+  check('«П→X 2» склеивается в П→X2 (код 62)',
+    function () { return codes(P.parseKeys('П→X 2', { len: 420 })); }, '98');
+
+  check('«К 1» склеивается в код 55',
+    function () { return codes(P.parseKeys('К 1', { len: 420 })); }, '85');
+
+  /* 5. Цифры набора */
+  check('«1 0» — две команды-цифры, а не десять',
+    function () { return codes(P.parseKeys('1 0', { len: 420 })); }, '1,0');
+
+  /* 6. Смешанный ввод */
+  check('код и нажатие в одном тексте: «62 П→X4» → 62 и 64',
+    function () { return codes(P.parseKeys('62 П→X4', { len: 420 })); }, '98,100');
+
+  /* 7. Авто-режим */
+  check('авто-разбор кодов даёт три ячейки',
+    function () {
+      var r = P.parseMixed('62 63 11', { len: 420, mode: 'auto' });
+      return [r.chosen, r.count];
+    }, ['codes', 3]);
+
+  check('авто-разбор нажатий даёт шесть ячеек',
+    function () {
+      var r = P.parseMixed('П→X2 П→X3 − П→X4 ÷ С/П', { len: 420, mode: 'auto' });
+      return [r.chosen, r.count];
+    }, ['keys', 6]);
+
+  /* 8. Ошибки не роняют разбор */
+  check('неизвестная команда — ошибка, но панель жива',
+    function () {
+      var r = P.parseKeys('П→X2 абракадабра С/П', { len: 420 });
+      return [r.ok, r.count, r.errors.length > 0];
+    }, [false, 2, true]);
+
+  /* 9. Начальный адрес */
+  check('начальный адрес сдвигает раскладку',
+    function () {
+      var r = P.parseCodes('62 63', { len: 420, start: 10 });
+      return [r.cells[0].addr, r.cells[1].addr];
+    }, [10, 11]);
+
+  /* 10. Границы */
+  check('код больше FF — замечание, а не падение',
+    function () {
+      var r = P.parseCodes('62 1FF', { len: 420 });
+      return [r.ok, r.errors.length > 0];
+    }, [false, true]);
+
+  /* 11. Таблица соответствия */
+  check('previewRows отдаёт адрес, код и нажатие',
+    function () {
+      var r = P.parseCodes('62 63 11', { len: 420 });
+      var rows = P.previewRows(r.cells, 420, null, 10);
+      return rows.map(function (x) { return x.addr + ':' + x.code + ':' + x.text; });
+    }, ['0:62:П→X2', '1:63:П→X3', '2:11:−']);
+
+  /* 12. Пустой шаг не попадает в таблицу */
+  check('К НОП не показывается строкой',
+    function () {
+      var r = P.parseCodes('11 54 12', { len: 420 });
+      var rows = P.previewRows(r.cells, 420, null, 10);
+      return rows.length;
+    }, 2);
+
+  sum.className = 'sum ' + (pass === total ? 'ok' : 'bad');
+  sum.textContent = pass + ' из ' + total + (pass === total ? ' — всё зелёное' : ' — есть красные');
+})();
+</script>
+</body>
+</html>
