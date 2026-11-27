@@ -33,6 +33,7 @@
   th,td{border:1px solid #d5d1c2;padding:4px 8px;text-align:left}
   th{background:#eceade;font-weight:600}
   td.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .warn{color:#a02b1e;font-weight:600}
   a{color:#1a5fb4}
 </style>
 </head>
@@ -47,8 +48,8 @@
 <ol id="list"></ol>
 
 <h2>Что ядро говорит о кодах 37–3A</h2>
-<div class="sub" style="margin-bottom:6px">Прямая проверка таблицы ядра: если здесь не
-  К ∧ / К ∨ / К ⊕ / К ИНВ, значит словарь команд не совпадает с картой.</div>
+<div class="sub" style="margin-bottom:6px">Если в средней колонке не К ∧ / К ∨ / К ⊕ / К ИНВ,
+  значит имя в карте ядра не совпадает с тем, что ждёт словарь.</div>
 <table id="coreTab"><tbody></tbody></table>
 
 <script src="core.js?v=14"></script>
@@ -112,7 +113,7 @@
   /* ---------- диагностика словаря ---------- */
   function showDiag() {
     if (!A) {
-      diag.textContent = 'Слой codes-aliases.js не загрузился — словарь синонимов отсутствует.';
+      diag.textContent = 'Слой codes-aliases.js не загрузился — словаря синонимов нет.';
       return;
     }
     diag.textContent = 'Словарь v' + (A.version || '?') +
@@ -139,8 +140,8 @@
     miss.className = 'miss bad';
     miss.innerHTML = '';
     var b = document.createElement('b');
-    b.textContent = 'Не найдено в нашей карте: ' + sk.length + ' групп' +
-      ' (эти написания панель не поймёт)';
+    b.textContent = 'Не найдено в нашей карте: ' + sk.length + ' групп — ' +
+      'эти написания панель не поймёт';
     miss.appendChild(b);
     var ul = document.createElement('ul');
     for (var i = 0; i < sk.length; i++) {
@@ -151,28 +152,32 @@
     miss.appendChild(ul);
     var hint = document.createElement('span');
     hint.className = 'hint';
-    hint.textContent = 'Такое бывает, когда команда в ядре ещё не реализована ' +
+    hint.textContent = 'Обычно это команда, которая в ядре ещё не реализована ' +
       'или называется иначе. Список — то, что стоит дописать в таблицу имён.';
     miss.appendChild(hint);
   }
 
   /* ---------- таблица кодов 37–3A ---------- */
   function showCore() {
-    var codes = [0x37, 0x38, 0x39, 0x3A, 0x0D];
+    var rows = [[0x37, 'KA'], [0x38, 'KB'], [0x39, 'KC'], [0x3A, 'KD'], [0x0D, '']];
     var head = document.createElement('tr');
-    ['Код', 'Имя в ядре', 'Разбор как «К ∧»', 'Разбор как «К ∨»'].forEach(function (t) {
+    ['Код', 'Имя в ядре', 'Чужое написание', 'Код из него'].forEach(function (t) {
       var th = document.createElement('th');
       th.textContent = t;
       head.appendChild(th);
     });
     coreTab.appendChild(head);
-    for (var i = 0; i < codes.length; i++) {
-      var c = codes[i];
+
+    for (var i = 0; i < rows.length; i++) {
+      var c = rows[i][0];
+      var alias = rows[i][1];
       var tr = document.createElement('tr');
+
       var td1 = document.createElement('td');
       td1.className = 'mono';
       td1.textContent = hex(c);
       tr.appendChild(td1);
+
       var td2 = document.createElement('td');
       var nm = '—';
       try {
@@ -180,14 +185,26 @@
       } catch (e) { nm = '—'; }
       td2.textContent = nm;
       tr.appendChild(td2);
+
       var td3 = document.createElement('td');
       td3.className = 'mono';
-      td3.textContent = hex(codeOf('K' + String.fromCharCode(65 + (c - 0x37))));
+      td3.textContent = alias || '—';
       tr.appendChild(td3);
+
       var td4 = document.createElement('td');
       td4.className = 'mono';
-      td4.textContent = '';
+      if (alias) {
+        var got = codeOf(alias);
+        td4.textContent = hex(got);
+        if (got >= 0 && got !== c) {
+          td4.className = 'mono warn';
+          td4.textContent = hex(got) + ' ≠ ' + hex(c);
+        }
+      } else {
+        td4.textContent = '—';
+      }
       tr.appendChild(td4);
+
       coreTab.appendChild(tr);
     }
   }
