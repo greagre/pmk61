@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карта программы — проверки (analyze61)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px; line-height: 1.45; background: #f7f7f8; color: #1b1b1f; }
+  @media (prefers-color-scheme: dark) { body { background: #16161a; color: #e8e8ee; } }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; }
+  .sub { opacity: .7; font-size: 13px; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(128,128,128,.3); }
+  th { font-weight: 600; opacity: .8; }
+  .ok { color: #1a8c4a; font-weight: 600; }
+  .bad { color: #c0392b; font-weight: 600; }
+  .sum { font-size: 15px; font-weight: 600; margin: 12px 0; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 90px; font-family: ui-monospace, Menlo, Consolas, monospace;
+             font-size: 13px; padding: 10px; border-radius: 10px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  button { font-size: 15px; padding: 10px 16px; border-radius: 10px; border: 1px solid rgba(128,128,128,.4);
+           background: #2f6fed; color: #fff; margin-top: 8px; }
+  pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 12.5px; padding: 12px; border-radius: 10px; background: rgba(128,128,128,.12); margin: 8px 0; }
+  .note { font-size: 13px; opacity: .75; }
+</style>
+</head>
+<body>
+
+<h1>Карта программы</h1>
+<div class="sub">analyze61.js v1 — блоки, переходы, циклы. Проверки и разбор своих кодов.</div>
+
+<div id="summary" class="sum">Идут проверки…</div>
+<table id="results"><thead><tr><th>Проверка</th><th>Ожидание</th><th>Факт</th><th></th></tr></thead><tbody></tbody></table>
+
+<h2>Разобрать свои коды</h2>
+<div class="note">Вводи коды через пробел: <code>51 00 00</code>. Пустые шаги (54) можно не писать.</div>
+<textarea id="src">01 02 51 00 00</textarea>
+<button id="btn">Разобрать</button>
+
+<h2>Отчёт</h2>
+<pre id="report">—</pre>
+
+<h2>Граф для mermaid</h2>
+<div class="note">Скопируй текст и вставь в чат Honer AI или на mermaid.live.</div>
+<pre id="graph">—</pre>
+
+<script src="core.js?v=14"></script>
+<script src="disasm61.js?v=8"></script>
+<script src="analyze61.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var NOP = 0x54;
+  var total = 0, passed = 0;
+
+  function pad(prog, n) {
+    var p = prog.slice();
+    while (p.length < (n || 105)) p.push(NOP);
+    return p;
+  }
+
+  function eq(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  var tbody = document.querySelector('#results tbody');
+
+  function check(name, expect, fact, ok) {
+    total++;
+    if (ok) passed++;
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + name + '</td><td>' + expect + '</td><td>' + fact +
+                   '</td><td class="' + (ok ? 'ok' : 'bad') + '">' + (ok ? '✔' : '✘') + '</td>';
+    tbody.appendChild(tr);
+  }
+
+  function run() {
+    if (!window.MKAnalyze) {
+      document.getElementById('summary').innerHTML =
+        '<span class="bad">analyze61.js не подключён</span>';
+      return;
+    }
+
+    var A = window.MKAnalyze;
+
+    /* 1. Пустая программа */
+    var a = A.analyze(pad([]));
+    check('Пустая программа', '0 яч., 0 блоков', a.size + ' яч., ' + a.blocks.length + ' бл.',
+          a.size === 0 && a.blocks.length === 0);
+
+    /* 2. Одна команда */
+    a = A.analyze(pad([0x01]));
+    check('Одна команда', '1 яч., 1 блок, 0 переходов',
+          a.size + ' яч., ' + a.blocks.length + ' бл., ' + a.edges.length + ' пер.',
+          a.size === 1 && a.blocks.length === 1 && a.edges.length === 0);
+
+    /* 3. Безусловный переход назад = цикл */
+    a = A.analyze(pad([0x01, 0x02, 0x51, 0x00, 0x00]));
+    check('БП назад', '1 цикл, стрелка назад',
+          a.loops.length + ' цикл(ов), ' + (a.edges[0] && a.edges[0].back ? 'назад' : 'вперёд'),
+          a.loops.length === 1 && a.edges.length === 1 && a.edges[0].back === true);
+
+    /* 4. Условный переход вперёд делит программу на блоки */
+    a = A.analyze(pad([0x5A, 0x00, 0x05, 0x01, 0x02, 0x03]));
+    check('Условный переход вперёд', '3 блока, 1 переход вперёд',
+          a.blocks.length + ' бл., ' + a.edges.length + ' пер., циклов ' + a.loops.length,
+          a.blocks.length === 3 && a.edges.length === 1 &&
+          a.edges[0].back === false && a.loops.length === 0);
+
+    /* 5. Цель перехода есть, и она верная */
+    a = A.analyze(pad([0x5A, 0x00, 0x05, 0x01, 0x02, 0x03]));
+    check('Адрес цели перехода', '5', String(a.edges[0] && a.edges[0].target),
+          a.edges[0] && a.edges[0].target === 5);
+
+    /* 6. Переход в никуда */
+    a = A.analyze(pad([0x51, 0x09, 0x09]));
+    var dang = a.warnings.filter(function (w) { return w.kind === 'dangling'; }).length;
+    check('Переход в никуда', '1 замечание', dang + ' замеч., переходов ' + a.edges.length,
+          dang === 1 && a.edges.length === 0);
+
+    /* 7. Косвенный переход не рисует выдуманную стрелку */
+    a = A.analyze(pad([0x5D, 0x00, 0x01]));
+    var ind = a.warnings.filter(function (w) { return w.kind === 'indirect'; }).length;
+    check('Косвенный переход (К БП)', 'не падает, есть 1 переход',
+          a.jumps.length + ' переход(ов), ' + ind + ' косвен.',
+          a.jumps.length === 1);
+
+    /* 8. Двухбайтовая команда расширения не сдвигает адреса */
+    a = A.analyze(pad([0xF0, 0x21, 0x01]));
+    check('F0 21 не сдвигает адрес', '3 яч., строка на адресе 2 = цифра 1',
+          a.size + ' яч., строк ' + a.rows.length + ', вторая на ' + (a.rows[1] && a.rows[1].addr),
+          a.size === 3 && a.rows.length === 2 && a.rows[1].addr === 2);
+
+    /* 9. Трёхбайтный переход занимает ровно три ячейки */
+    a = A.analyze(pad([0x51, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]));
+    check('Переход = 3 ячейки', 'строки 0,3,4,5,6,7',
+          a.rows.map(function (r) { return r.addr; }).join(','),
+          eq(a.rows.map(function (r) { return r.addr; }), [0, 3, 4, 5, 6, 7]));
+
+    /* 10. Граф mermaid */
+    var g = A.mermaid(A.analyze(pad([0x01, 0x02, 0x51, 0x00, 0x00])));
+    check('Граф mermaid', 'graph TD и стрелка', g.split('\n').length + ' строк',
+          g.indexOf('graph TD') === 0 && g.indexOf('-->') > 0);
+
+    /* 11. Отчёт */
+    var rep = A.report(A.analyze(pad([0x01, 0x02, 0x51, 0x00, 0x00])));
+    check('Текстовый отчёт', 'есть разделы «Циклы» и «Блоки»',
+          rep.length + ' знаков',
+          rep.indexOf('Блоки:') >= 0 && rep.indexOf('Циклы:') >= 0 && rep.indexOf('Замечания:') >= 0);
+
+    /* 12. Адрес 100–104 разбирается как -0…-4 */
+    a = A.analyze(pad([0x51, 0x0A, 0x03]));
+    check('Дальний адрес -3', 'цель 103', 'цель ' + (a.jumps[0] && a.jumps[0].target),
+          a.jumps[0] && a.jumps[0].target === 103);
+
+    document.getElementById('summary').innerHTML =
+      (passed === total ? '<span class="ok">' : '<span class="bad">') +
+      'Проверок пройдено: ' + passed + ' из ' + total + '</span>';
+  }
+
+  /* ----- разбор своих кодов ----- */
+  function parseCodes(text) {
+    var tokens = String(text).replace(/[^0-9A-Fa-f]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+    var out = [];
+    for (var i = 0; i < tokens.length; i++) {
+      var t = tokens[i];
+      if (t.length === 1) t = '0' + t;
+      if (t.length !== 2) throw new Error('Не пара hex: ' + tokens[i]);
+      out.push(parseInt(t, 16));
+    }
+    return out;
+  }
+
+  document.getElementById('btn').onclick = function () {
+    var rep = document.getElementById('report');
+    var gr = document.getElementById('graph');
+    try {
+      var prog = parseCodes(document.getElementById('src').value);
+      if (!prog.length) throw new Error('Пусто');
+      var a = window.MKAnalyze.analyze(prog);
+      rep.textContent = window.MKAnalyze.report(a) + '\n\nЛистинг:\n' + window.MKDasm.text(prog, { length: a.size });
+      gr.textContent = window.MKAnalyze.mermaid(a);
+    } catch (e) {
+      rep.textContent = 'Ошибка: ' + e.message;
+      gr.textContent = '—';
+    }
+  };
+
+  run();
+})();
+</script>
+
+</body>
+</html>
