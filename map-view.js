@@ -1,33 +1,33 @@
-/* map-view.js v1 — рисование блок-схемы программы МК-61.
-   Только картинка: блоки, границы участков, стрелки и петли.
-   Расчёт (участки, переходы, циклы) берётся из analyze61.js.
-   Подключается и в отдельную страницу карты, и во вкладку «Карта» калькулятора. */
+/* map-view.js v2 — рисование блок-схемы программы МК-61.
+   Только картинка. Расчёт (участки, переходы, циклы) берёт из analyze61.js:
+   an = { size, rows, blocks, edges, loops, warnings }
+   rows[i]   = { addr, len, kind, text }
+   blocks[i] = { n, start, end, fromIndex, toIndex }
+   edges[i]  = { from, to, target, name, back }
+
+   Главное отличие от страницы: границы участка считаются по ПОСЛЕДНЕЙ ЗАНЯТОЙ
+   ячейке, а не по адресу последней строки. Поэтому участок с БП на адресе 02
+   подписывается 00–04, а не 00–02. */
 (function (global) {
   'use strict';
 
   var NS = 'http://www.w3.org/2000/svg';
-  var ROW_H = 26;      /* высота строки листинга */
-  var PAD_X = 12;      /* поля внутри рамки */
-  var HEAD_H = 24;     /* полоса заголовка участка */
-  var GAP = 30;        /* промежуток между участками */
-  var LOOP_W = 62;     /* вынос петли вправо */
-  var SIDE_W = 74;     /* вынос перехода к другому участку */
-  var MIN_W = 230;     /* минимальная ширина рамки */
+
+  var ROW_H = 26;    /* высота строки листинга */
+  var HEAD_H = 26;   /* заголовок участка */
+  var PAD = 10;      /* поле внутри рамки */
+  var GAP = 32;      /* промежуток между участками */
+  var LOOP_W = 68;   /* вынос петли вправо */
+  var MIN_W = 236;   /* минимальная ширина рамки */
 
   function pad2(v) {
     v = String(v);
     return v.length < 2 ? '0' + v : v;
   }
   function num(v, d) {
-    return (v === undefined || v === null || v === '' || isNaN(v)) ? d : Number(v);
+    var n = Number(v);
+    return (v === undefined || v === null || v === '' || isNaN(n)) ? d : n;
   }
-  function firstDefined() {
-    for (var i = 0; i < arguments.length; i++) {
-      if (arguments[i] !== undefined && arguments[i] !== null && arguments[i] !== '') return arguments[i];
-    }
-    return undefined;
-  }
-
   function el(tag, attrs, text) {
     var n = document.createElementNS(NS, tag);
     if (attrs) {
@@ -41,134 +41,91 @@
     return n;
   }
 
-  /* ---- совместимость имён полей анализа ---- */
-
-  function rowsOf(a) { return (a && a.rows) || []; }
-  function blocksOf(a) { return (a && a.blocks) || (a && a.areas) || []; }
-  function edgesOf(a) { return (a && a.edges) || []; }
-  function skippedOf(a) { return (a && a.skipped) || []; }
+  function rowsOf(an) { return (an && an.rows) || []; }
+  function blocksOf(an) { return (an && an.blocks) || []; }
+  function edgesOf(an) { return (an && an.edges) || []; }
 
   function rowAddr(r) { return num(r && r.addr, 0); }
   function rowLen(r) { var n = num(r && r.len, 1); return n > 0 ? n : 1; }
-  function rowText(r) { return String(firstDefined(r && r.text, r && r.name, r && r.code, '')); }
-  function rowCode(r) { return firstDefined(r && r.code, ''); }
+  function rowText(r) { return String((r && r.text) || '—'); }
 
-  function blockStart(b, i) {
-    return num(firstDefined(b && b.start, b && b.addr, b && b.from, b && b.first), i * 0);
-  }
-  function blockEndRaw(b, i) {
-    return num(firstDefined(b && b.end, b && b.last, b && b.to), blockStart(b, i));
-  }
-  function blockName(b, i) {
-    return String(firstDefined(b && b.name, b && b.label, b && b.title, 'Б' + i));
-  }
-
-  function edgeFrom(e) { return num(firstDefined(e && e.from, e && e.src, e && e.a, e && e.block), -1); }
-  function edgeTo(e) { return num(firstDefined(e && e.to, e && e.dst, e && e.b, e && e.targetBlock), -1); }
-  function edgeKind(e) { return String(firstDefined(e && e.kind, e && e.dir, '')); }
-  function edgeName(e) {
-    return String(firstDefined(e && e.name, e && e.text, e && e.command, 'переход'));
-  }
-
-  /* ---- границы участка: по последней ЗАНЯТОЙ ячейке ---- */
-
-  function blockRange(a, b, i) {
-    var start = blockStart(b, i);
-    var rawEnd = blockEndRaw(b, i);
-    var end = start;
-    var rows = rowsOf(a);
-    for (var k = 0; k < rows.length; k++) {
-      var r = rows[k];
-      var ad = rowAddr(r);
-      if (ad < start) continue;
-      if (rawEnd >= start && ad > rawEnd) continue;
-      var last = ad + rowLen(r) - 1;
-      if (last > end) end = last;
+  /* строки, относящиеся к участку */
+  function rowsInBlock(an, b) {
+    var rows = rowsOf(an);
+    if (b && b.fromIndex !== undefined && b.toIndex !== undefined) {
+      return rows.slice(b.fromIndex, b.toIndex + 1);
     }
-    return { start: start, end: end };
-  }
-
-  function blockRows(a, start, end) {
+    var s = num(b && b.start, 0);
+    var e = num(b && b.end, s);
     var out = [];
-    var rows = rowsOf(a);
-    for (var k = 0; k < rows.length; k++) {
-      var ad = rowAddr(rows[k]);
-      if (ad >= start && ad <= end) out.push(rows[k]);
+    for (var i = 0; i < rows.length; i++) {
+      var a = rowAddr(rows[i]);
+      if (a >= s && a <= e) out.push(rows[i]);
     }
     return out;
   }
 
-  /* Раскладка: для каждого участка — рамка, строки, петли и внешние переходы. */
-  function layout(a) {
-    var blocks = blocksOf(a);
-    var edges = edgesOf(a);
+  /* последняя занятая ячейка участка с учётом длины трёхбайтных команд */
+  function lastCell(an, b, list) {
+    list = list || rowsInBlock(an, b);
+    var best = num(b && b.start, 0);
+    for (var i = 0; i < list.length; i++) {
+      var last = rowAddr(list[i]) + rowLen(list[i]) - 1;
+      if (last > best) best = last;
+    }
+    return best;
+  }
+
+  function layout(an) {
+    var blocks = blocksOf(an);
+    var edges = edgesOf(an);
     var areas = [];
+    var i;
 
-    if (!blocks.length) {
-      var rows = rowsOf(a);
-      if (rows.length) {
-        areas.push({ index: 0, name: 'Участок 1', start: rowAddr(rows[0]), end: rowAddr(rows[rows.length - 1]) + rowLen(rows[rows.length - 1]) - 1 });
-      }
-    } else {
-      for (var i = 0; i < blocks.length; i++) {
-        var rg = blockRange(a, blocks[i], i);
-        areas.push({ index: i, name: blockName(blocks[i], i), start: rg.start, end: rg.end });
-      }
+    for (i = 0; i < blocks.length; i++) {
+      var list = rowsInBlock(an, blocks[i]);
+      var start = num(blocks[i] && blocks[i].start, list.length ? rowAddr(list[0]) : 0);
+      areas.push({
+        index: i,
+        name: 'Участок ' + (i + 1),
+        start: start,
+        end: lastCell(an, blocks[i], list),
+        rows: list,
+        loops: [],
+        outs: []
+      });
     }
 
-    for (var j = 0; j < areas.length; j++) {
-      areas[j].rows = blockRows(a, areas[j].start, areas[j].end);
-      areas[j].loops = [];
-      areas[j].outs = [];
-    }
-
-    /* куда относится адрес перехода */
-    function areaAt(addr) {
-      for (var q = 0; q < areas.length; q++) {
-        if (addr >= areas[q].start && addr <= areas[q].end) return areas[q];
-      }
-      return null;
-    }
-
-    for (var e = 0; e < edges.length; e++) {
-      var ed = edges[e];
-      var fromA = areas[edgeFrom(ed)] || areaAt(num(firstDefined(ed && ed.at, ed && ed.addr), -1));
-      if (!fromA) continue;
-      var toA = areas[edgeTo(ed)] || areaAt(num(firstDefined(ed && ed.target, ed && ed.cell), -1));
-      if (toA && toA === fromA) {
-        fromA.loops.push({ name: edgeName(ed), kind: edgeKind(ed) });
-      } else if (toA) {
-        fromA.outs.push({ name: edgeName(ed), to: toA.index });
+    for (i = 0; i < edges.length; i++) {
+      var e = edges[i] || {};
+      var f = num(e.from, NaN);
+      var t = num(e.to, NaN);
+      if (!areas[f]) continue;
+      var back = !!e.back || (f === t);
+      if (f === t) {
+        areas[f].loops.push({ name: String(e.name || 'назад'), target: num(e.target, areas[f].start) });
+      } else if (areas[t]) {
+        areas[f].outs.push({ name: String(e.name || 'переход'), to: t, back: back });
       }
     }
 
     return areas;
   }
 
-  /* Высота рамки участка: заголовок + строки команд + серые строки адресов */
+  /* строки для рисования: команда + при трёхбайтной команде — серая строка адреса */
   function areaLines(area) {
     var lines = [];
     for (var i = 0; i < area.rows.length; i++) {
       var r = area.rows[i];
       var ad = rowAddr(r);
       var len = rowLen(r);
-      lines.push({
-        kind: 'cmd',
-        addr: ad,
-        last: ad + len - 1,
-        len: len,
-        code: rowCode(r),
-        text: rowText(r)
-      });
+      lines.push({ kind: 'cmd', addr: ad, last: ad + len - 1, len: len, text: rowText(r) });
       if (len > 1) {
-        lines.push({
-          kind: 'addr',
-          addr: ad + 1,
-          last: ad + len - 1,
-          code: '',
-          text: 'адрес ' + pad2(area.rows[i] && 0 === 0 ? 0 : 0) + '',
-          raw: r
-        });
+        var has = false;
+        for (var k = 0; k < area.rows.length; k++) {
+          if (rowAddr(area.rows[k]) === ad + 1) has = true;
+        }
+        if (!has) lines.push({ kind: 'addr', addr: ad + 1, last: ad + len - 1 });
       }
     }
     return lines;
@@ -177,165 +134,146 @@
   function drawArea(svg, area, x, y, w, opts) {
     var g = el('g', { 'class': 'area' });
     var lines = areaLines(area);
-    var h = HEAD_H + PAD_X + lines.length * ROW_H + PAD_X;
+    var h = HEAD_H + PAD + lines.length * ROW_H + PAD / 2;
 
     g.appendChild(el('rect', {
       x: x, y: y, width: w, height: h, rx: 10, ry: 10,
       fill: opts.areaFill, stroke: opts.areaStroke, 'stroke-width': 2
     }));
 
-    var title = g.appendChild(el('text', {
-      x: x + PAD_X, y: y + 18, 'font-size': 13, 'font-weight': 700, fill: opts.titleColor
+    g.appendChild(el('text', {
+      x: x + PAD, y: y + 18, 'font-size': 13, 'font-weight': 700, fill: opts.titleColor
     }, area.name + ' · ' + pad2(area.start) + '\u2013' + pad2(area.end)));
-    title.setAttribute('class', 'area-title');
 
-    var ty = y + HEAD_H + 4;
+    var ty = y + HEAD_H;
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i];
       ty += ROW_H;
       if (ln.kind === 'addr') {
-        var t0 = el('text', {
-          x: x + PAD_X + 34, y: ty - 6, 'font-size': 12, fill: opts.mutedColor
-        }, pad2(ln.addr) + '\u2013' + pad2(ln.last) + '  адрес');
-        g.appendChild(t0);
+        g.appendChild(el('text', {
+          x: x + PAD + 34, y: ty - 7, 'font-size': 12, fill: opts.mutedColor
+        }, pad2(ln.addr) + '\u2013' + pad2(ln.last) + '  адрес перехода'));
         continue;
       }
       g.appendChild(el('text', {
-        x: x + PAD_X, y: ty - 6, 'font-size': 13,
-        fill: opts.mutedColor, 'font-family': 'monospace'
+        x: x + PAD, y: ty - 7, 'font-size': 13, fill: opts.mutedColor,
+        'font-family': 'ui-monospace, Menlo, Consolas, monospace'
       }, pad2(ln.addr)));
       g.appendChild(el('text', {
-        x: x + PAD_X + 34, y: ty - 6, 'font-size': 13, fill: opts.textColor
+        x: x + PAD + 34, y: ty - 7, 'font-size': 13, fill: opts.textColor
       }, ln.text));
       if (ln.len > 1) {
         g.appendChild(el('text', {
-          x: x + PAD_X + 34, y: ty + 8, 'font-size': 11, fill: opts.mutedColor
+          x: x + PAD + 34, y: ty + 7, 'font-size': 11, fill: opts.mutedColor
         }, '(' + pad2(ln.addr) + '\u2013' + pad2(ln.last) + ')'));
       }
     }
 
-    /* петли назад — справа от рамки */
+    /* петля назад — справа от рамки */
     for (var L = 0; L < area.loops.length; L++) {
-      var loop = area.loops[L];
       var ax = x + w;
       var ay = y + h - 14;
       var by = y + 14;
-      var path = 'M ' + ax + ' ' + ay +
-        ' L ' + (ax + LOOP_W) + ' ' + ay +
-        ' L ' + (ax + LOOP_W) + ' ' + by +
-        ' L ' + (ax + 6) + ' ' + by;
-      g.appendChild(el('path', {
-        d: path, fill: 'none', stroke: opts.loopColor, 'stroke-width': 2
-      }));
+      var path = 'M' + ax + ',' + ay + ' H' + (ax + LOOP_W) + ' V' + by + ' H' + (ax + 8);
+      g.appendChild(el('path', { d: path, fill: 'none', stroke: opts.loopColor, 'stroke-width': 2 }));
       g.appendChild(el('polygon', {
-        points: (ax + 6) + ',' + by + ' ' + (ax + 16) + ',' + (by - 5) + ' ' + (ax + 16) + ',' + (by + 5),
+        points: (ax + 8) + ',' + by + ' ' + (ax + 18) + ',' + (by - 5) + ' ' + (ax + 18) + ',' + (by + 5),
         fill: opts.loopColor
       }));
-      var lx = ax + LOOP_W + 4;
-      var ly = (ay + by) / 2 + 4;
       g.appendChild(el('text', {
-        x: lx, y: ly, 'font-size': 12, fill: opts.loopColor
-      }, '\u21ba ' + loop.name));
+        x: ax + 6, y: (ay + by) / 2 + 4, 'font-size': 12, fill: opts.loopColor
+      }, '\u21ba ' + area.loops[L].name + ' \u2192 ' + pad2(area.loops[L].target)));
     }
 
-    area._h = h;
-    area._y = y;
-    area._x = x;
-    area._w = w;
+    area._x = x; area._y = y; area._w = w; area._h = h;
     svg.appendChild(g);
     return h;
   }
 
-  /* Переходы между участками: линия сбоку с подписью над ней. */
   function drawOuts(svg, areas, opts) {
     for (var i = 0; i < areas.length; i++) {
       var from = areas[i];
+      var used = 0;
       for (var k = 0; k < from.outs.length; k++) {
         var out = from.outs[k];
         var to = areas[out.to];
         if (!to || to._y === undefined) continue;
         var down = to._y > from._y;
-        var x1 = from._x + from._w + 10;
+        var lane = 22 + used * 16;
+        used++;
         var y1 = down ? from._y + from._h - 12 : from._y + 12;
-        var x2 = to._x + to._w + 10;
         var y2 = down ? to._y + 12 : to._y + to._h - 12;
-        var xm = Math.max(x1, x2) + 18;
-        var d = 'M ' + x1 + ' ' + y1 + ' H ' + xm + ' V ' + y2 + ' H ' + x2;
-        svg.appendChild(el('path', {
-          d: d, fill: 'none', stroke: opts.arrowColor, 'stroke-width': 2
-        }));
-        var dir = down ? 1 : -1;
+        var x1 = from._x + from._w;
+        var x2 = to._x + to._w;
+        var xm = Math.max(x1, x2) + lane;
+        var d = 'M' + x1 + ',' + y1 + ' H' + xm + ' V' + y2 + ' H' + (x2 + 12);
+        svg.appendChild(el('path', { d: d, fill: 'none', stroke: opts.arrowColor, 'stroke-width': 2 }));
         svg.appendChild(el('polygon', {
-          points: (x2 + 10) + ',' + y2 + ' ' + x2 + ',' + (y2 - 5) + ' ' + x2 + ',' + (y2 + 5),
+          points: (x2 + 12) + ',' + y2 + ' ' + (x2 + 2) + ',' + (y2 - 5) + ' ' + (x2 + 2) + ',' + (y2 + 5),
           fill: opts.arrowColor
         }));
         svg.appendChild(el('text', {
           x: xm + 4, y: (y1 + y2) / 2 + 4, 'font-size': 12, fill: opts.arrowColor
-        }, '\u2193 ' + out.name));
+        }, (down ? '\u2193 ' : '\u2191 ') + out.name));
       }
     }
   }
 
-  function render(container, a, options) {
+  function render(container, an, options) {
     var opts = {
-      areaFill: '#ffffff', areaStroke: '#c9d3e0', titleColor: '#2b3a4a',
-      textColor: '#1c2530', mutedColor: '#7b8794', loopColor: '#d9842a',
-      arrowColor: '#3b6fd4', width: 340
+      areaFill: '#ffffff', areaStroke: '#cfd4dc', titleColor: '#5b6270',
+      textColor: '#1c1f24', mutedColor: '#9aa1ad', loopColor: '#d97a10',
+      arrowColor: '#2f6fed', width: 0
     };
-    if (options) for (var k in options) if (Object.prototype.hasOwnProperty.call(options, k)) opts[k] = options[k];
+    if (options) {
+      for (var k in options) if (Object.prototype.hasOwnProperty.call(options, k)) opts[k] = options[k];
+    }
 
     while (container.firstChild) container.removeChild(container.firstChild);
 
-    var areas = layout(a);
+    var areas = layout(an);
     if (!areas.length) {
       var empty = document.createElement('div');
-      empty.className = 'map-empty';
-      empty.textContent = 'Программа пуста — вводить нечего рисовать.';
+      empty.className = 'msg';
+      empty.textContent = 'Участков нет.';
       container.appendChild(empty);
-      return { areas: [] };
+      return { areas: areas };
     }
 
-    /* ширину подгоняем по числу кружков и подписей, но не меньше MIN_W */
-    var w = Math.max(MIN_W, num(opts.width, 340));
-    var svg = el('svg', {
-      xmlns: NS, 'class': 'map-svg',
-      viewBox: '0 0 ' + (w + LOOP_W + 40) + ' ' + '10'
-    });
+    var avail = num(opts.width, 0) || (container.clientWidth || 320);
+    var w = Math.max(MIN_W, avail - LOOP_W - 34);
+    var svg = el('svg', { xmlns: NS, 'class': 'map', preserveAspectRatio: 'xMinYMin meet' });
 
-    var y = 10;
+    var y = 14;
     for (var i = 0; i < areas.length; i++) {
-      var h = drawArea(svg, areas[i], 4, y, w, opts);
+      var h = drawArea(svg, areas[i], 14, y, w, opts);
       y += h + GAP;
     }
     drawOuts(svg, areas, opts);
 
-    svg.setAttribute('viewBox', '0 0 ' + (w + LOOP_W + 40) + ' ' + y);
+    svg.setAttribute('viewBox', '0 0 ' + (14 + w + LOOP_W + 26) + ' ' + (y - GAP + 14));
     svg.setAttribute('width', '100%');
-    svg.removeAttribute('height');
     svg.style.display = 'block';
     container.appendChild(svg);
     return { areas: areas };
   }
 
-  /* Текст графа для вставки в чат — то же, что на странице проверок. */
-  function mermaid(a) {
-    var areas = layout(a);
+  /* запасной вариант графа, если analyze61 не умеет mermaid() */
+  function mermaid(an) {
+    var areas = layout(an);
     var lines = ['graph TD'];
     for (var i = 0; i < areas.length; i++) {
-      var ar = areas[i];
+      var a = areas[i];
       var parts = [];
-      for (var k = 0; k < ar.rows.length; k++) parts.push(rowText(ar.rows[k]));
-      var cap = pad2(ar.start) + '\u2013' + pad2(ar.end) + ': ' + (parts.join(', ') || '—');
+      for (var k = 0; k < a.rows.length; k++) parts.push(rowText(a.rows[k]));
+      var cap = pad2(a.start) + '\u2013' + pad2(a.end) + ': ' + (parts.join(', ') || '\u2014');
       if (cap.length > 46) cap = cap.slice(0, 45) + '\u2026';
       lines.push('  B' + i + '["' + cap.replace(/"/g, '') + '"]');
     }
-    for (var L = 0; L < areas.length; L++) {
-      var aos = areas[L];
-      for (var q = 0; q < aos.loops.length; q++) {
-        lines.push('  B' + L + ' -->|\u043d\u0430\u0437\u0430\u0434| B' + L);
-      }
-      for (var o = 0; o < aos.outs.length; o++) {
-        lines.push('  B' + L + ' -->|' + aos.outs[o].name.replace(/"/g, '') + '| B' + aos.outs[o].to);
+    for (var j = 0; j < areas.length; j++) {
+      for (var q = 0; q < areas[j].loops.length; q++) lines.push('  B' + j + ' -->|\u043d\u0430\u0437\u0430\u0434| B' + j);
+      for (var o = 0; o < areas[j].outs.length; o++) {
+        lines.push('  B' + j + ' -->|' + areas[j].outs[o].name.replace(/"/g, '') + '| B' + areas[j].outs[o].to);
       }
     }
     return lines.join('\n');
@@ -343,9 +281,9 @@
 
   global.MKMap = {
     render: render,
-    mermaid: mermaid,
     layout: layout,
-    blockRange: blockRange,
-    version: 1
+    mermaid: mermaid,
+    lastCell: lastCell,
+    version: 2
   };
 })(typeof window !== 'undefined' ? window : this);
