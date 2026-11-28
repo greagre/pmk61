@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pmk61 · тесты разбора адресов</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 12px; background: #f6f7f9; color: #1c1f24; }
+  h1 { font-size: 18px; margin: 4px 0 10px; }
+  .lead { font-size: 13px; color: #5b6270; margin-bottom: 12px; line-height: 1.45; }
+  .sum { padding: 10px 12px; border-radius: 10px; font-size: 15px; font-weight: 600;
+         margin-bottom: 12px; background: #e7f4ec; color: #1c7a45; }
+  .sum.bad { background: #fdeaea; color: #b02b2b; }
+  .t { background: #fff; border: 1px solid #e2e5ea; border-radius: 10px;
+       padding: 9px 11px; margin-bottom: 8px; font-size: 13px; }
+  .t.ok { border-left: 4px solid #33b373; }
+  .t.no { border-left: 4px solid #e05252; background: #fffafa; }
+  .n { font-weight: 700; color: #5b6270; }
+  .name { margin: 3px 0 5px; }
+  .io { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+        color: #3b4048; word-break: break-word; }
+  .io b { color: #1c1f24; }
+  .err { color: #b02b2b; font-size: 12px; margin-top: 4px; }
+  .foot { font-size: 12px; color: #8a909c; margin-top: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<h1>Тесты разбора адресов</h1>
+<div class="lead">
+  Проверяют <b>codes-addr.js</b>: правильно ли разворачивается адрес перехода,
+  когда он записан одним числом, как в журналах. Ничего не рисуют — только считают.
+</div>
+
+<div id="sum" class="sum">…</div>
+<div id="list"></div>
+
+<div class="foot">
+  Открывать со <code>?v=1</code>, иначе браузер покажет старую версию из кэша.
+</div>
+
+<script src="core.js?v=14"></script>
+<script src="codes-addr.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var A = window.MKCodeAddr;
+  var out = document.getElementById('list');
+  var sum = document.getElementById('sum');
+  var ok = 0, all = 0;
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function show(n, name, input, got, want, extra) {
+    all++;
+    var pass = got === want;
+    if (pass) ok++;
+    var d = document.createElement('div');
+    d.className = 't ' + (pass ? 'ok' : 'no');
+    d.innerHTML =
+      '<div class="n">' + n + '</div>' +
+      '<div class="name">' + esc(name) + '</div>' +
+      '<div class="io">вход: <b>' + esc(input || '(пусто)') + '</b><br>' +
+      'вышло: <b>' + esc(got || '(пусто)') + '</b>' +
+      (pass ? '' : '<br>ждали: <b>' + esc(want) + '</b>') + '</div>' +
+      (extra ? '<div class="io">' + extra + '</div>' : '') +
+      (pass ? '' : '<div class="err">не совпало</div>');
+    out.appendChild(d);
+  }
+
+  function res(text, opts) {
+    return A.parse(text, opts);
+  }
+
+  function t(n, name, input, want, opts, extra) {
+    var r = res(input, opts);
+    show(n, name, input, A.textOf(r.bytes), want, extra);
+  }
+
+  /* 1–5: адрес одним числом и уже разложенный */
+  t(1, 'адрес одним числом в конце: 5D 03 → 5D 00 03', '5D 03', '5D 00 03');
+  t(2, 'адрес уже разложен: 5D 00 03 не меняется', '5D 00 03', '5D 00 03');
+  t(3, 'адрес больше девяти: 5D 30 → 5D 03 00', '5D 30', '5D 03 00');
+  t(4, 'отрицательный адрес: 5D -3 → 5D 0A 03', '5D -3', '5D 0A 03');
+  t(5, 'полубайт с буквой: 5D 0A 03 не меняется', '5D 0A 03', '5D 0A 03');
+
+  /* 6–8: не переходы и переходы с адресом внутри */
+  t(6, 'обычные команды не трогаем', '01 02 03', '01 02 03');
+  t(7, 'безусловный переход с нулями', '51 00 00', '51 00 00');
+  t(8, 'FL0 — тоже переход: 5E 07 → 5E 00 07', '5E 07', '5E 00 07');
+
+  /* 9–10: F0 — двухбайтная, адреса не имеет */
+  t(9, 'F0 21 — не переход, адрес не добавляем', 'F0 21', 'F0 21');
+  t(10, 'переход в журнале: 09. 07 после FL0', '5E 00 07 01', '5E 00 07 01');
+
+  /* 11: неоднозначная запись — разбирается как пара */
+  t(11, 'неоднозначно: 5D 03 01 читается как адрес 31', '5D 03 01', '5D 03 01');
+
+  /* 12: отключение исправления */
+  t(12, 'fixAddr:false — старое поведение, 5D 03 остаётся', '5D 03', '5D 03', { fixAddr: false });
+
+  /* 13: мусор не молчит */
+  (function () {
+    var r = res('5D XIIE 01');
+    show(13, 'OCR-мусор попадает в bad, а не съедается молча',
+      '5D XIIE 01',
+      'bad: ' + (r.bad.join(', ') || 'нет'),
+      'bad: XIIE',
+      'байты: ' + A.textOf(r.bytes));
+  })();
+
+  /* 14: пустой ввод */
+  t(14, 'пустой ввод — пустой результат', '', '');
+
+  /* 15: развёрнутые адреса перечислены в fixes */
+  (function () {
+    var r = res('5D 03 5E 07');
+    var f = r.fixes.map(function (x) { return x.raw + ' → ' + x.to; }).join('; ');
+    show(15, 'все развёрнутые адреса показаны в fixes',
+      '5D 03 5E 07',
+      f,
+      '03 → 03; 07 → 07',
+      'байты: ' + A.textOf(r.bytes));
+  })();
+
+  /* 16: адрес «-0» */
+  t(16, 'адрес -0 — это A0', '5D -0', '5D 0A 00');
+
+  sum.className = 'sum' + (ok === all ? '' : ' bad');
+  sum.textContent = ok + ' из ' + all + ' — ' + (ok === all ? 'все проверки прошли' : 'есть ошибки');
+})();
+</script>
+</body>
+</html>
