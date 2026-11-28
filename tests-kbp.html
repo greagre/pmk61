@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тесты К БП — модификация адреса</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 16px; background: #f2f2ee; color: #1c1c1a; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lead { font-size: 13px; color: #55554f; margin: 0 0 14px; }
+  .summary { font-size: 15px; font-weight: 700; padding: 10px 12px; border-radius: 10px;
+             margin-bottom: 14px; background: #e3efe6; color: #1d6b38; }
+  .summary.bad { background: #f7e2e2; color: #8d2020; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; background: #fff;
+          border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
+  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e6e6e0; }
+  th { background: #e9e9e2; font-weight: 600; }
+  td.ok { color: #1d6b38; }
+  td.no { color: #8d2020; font-weight: 700; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: #44443f; }
+  .note { font-size: 13px; background: #fff; border-radius: 10px; padding: 12px;
+          line-height: 1.5; border-left: 4px solid #8a8a80; }
+  code { font-family: ui-monospace, Consolas, monospace; background: #eeeee7;
+         padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>К БП: модификация адреса перехода</h1>
+<p class="lead">Автотест ядра pmk61. Ничего нажимать не нужно — только открыть страницу.</p>
+<div id="summary" class="summary">Считаю…</div>
+<div id="out"></div>
+
+<div class="note">
+  <b>Что проверяется.</b>
+  <code>modAddr</code> — модификация адреса по руководству: RG0–RG3 уменьшают адрес на 1,
+  RG4–RG6 увеличивают на 1, RG7–RGe оставляют как есть.
+  Косвенный переход <code>К БП n</code> должен брать адрес из регистра через эту модификацию.
+  Отдельно проверяется склейка цифр: если набор числа не завершён, следующая цифра
+  приписывается к прежней (так устроен <code>typeDigit</code>).
+</div>
+
+<script src="core.js?v=14"></script>
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var rows = [], pass = 0, fail = 0;
+
+  function expect(label, got, want) {
+    var ok = got === want;
+    if (ok) pass++; else fail++;
+    rows.push([label, String(want), String(got), ok]);
+  }
+
+  function core() {
+    return MKCore.create({
+      progLen: 105,
+      regCount: 15,
+      nop: 0x54,
+      maxDig: 8,
+      addrHigh: true,
+      addrHighFirst: 100,
+      addrHighLast: 104,
+      hasK: true
+    });
+  }
+
+  function blank() {
+    var p = new Array(105);
+    for (var i = 0; i < 105; i++) p[i] = 0x54;
+    return p;
+  }
+
+  /* Ожидаемый адрес после модификации: RG0–3 → −1, RG4–6 → +1, RG7–RGe → как есть. */
+  function wantAddr(v, r) {
+    if (r >= 0 && r <= 3) return (v - 1 + 105) % 105;
+    if (r >= 4 && r <= 6) return (v + 1) % 105;
+    return ((v % 105) + 105) % 105;
+  }
+
+  /* ---------- 1. modAddr напрямую ---------- */
+  var c1 = core();
+  for (var r = 0; r < 15; r++) {
+    expect('modAddr(5, R' + r + ')', c1.modAddr(5, r), wantAddr(5, r));
+  }
+
+  /* ---------- 2. косвенный переход по всем регистрам ---------- */
+  for (var r2 = 0; r2 < 15; r2++) {
+    var k = core();
+    var p2 = blank();
+    p2[0] = 0x80 | r2;          /* К БП n */
+    k.setProgram(p2);
+    k.setRegister(r2, 5);
+    k.step();
+    expect('К БП ' + r2 + ' при R' + r2 + '=5 → адрес', k.ST.ip, wantAddr(5, r2));
+  }
+
+  /* ---------- 3. сценарий A: R6 = 6 ---------- */
+  var a = core();
+  var pa = blank();
+  pa[0] = 0x06; pa[1] = 0x46; pa[2] = 0x86; pa[3] = 0x09;
+  pa[4] = 0x50; pa[5] = 0x08; pa[6] = 0x05; pa[7] = 0x50;
+  a.setProgram(pa);
+  a.run();
+  expect('A: R6=6, адрес после стопа', a.ST.ip, 7);
+  expect('A: X после стопа', a.ST.X, 6);
+
+  /* ---------- 4. сценарий B: R6 = 5 ---------- */
+  var b = core();
+  var pb = blank();
+  pb[0] = 0x05; pb[1] = 0x46; pb[2] = 0x86; pb[3] = 0x09;
+  pb[4] = 0x50; pb[5] = 0x08; pb[6] = 0x07; pb[7] = 0x50;
+  b.setProgram(pb);
+  b.run();
+  expect('B: R6=5, X после стопа', b.ST.X, 7);
+  expect('B: R6=5, адрес после стопа', b.ST.ip, 7);
+
+  /* ---------- 5. сценарий C: R9 = 5 ---------- */
+  var cc = core();
+  var pc = blank();
+  pc[0] = 0x05; pc[1] = 0x49; pc[2] = 0x89; pc[3] = 0x09;
+  pc[4] = 0x50; pc[5] = 0x08; pc[6] = 0x50;
+  cc.setProgram(pc);
+  cc.run();
+  expect('C: R9=5, X после стопа', cc.ST.X, 8);
+  expect('C: R9=5, адрес после стопа', cc.ST.ip, 6);
+
+  /* ---------- 6. склейка цифр ---------- */
+  var d = core();
+  d.exec(0x06);
+  d.exec(0x05);
+  expect('D: 6 затем 5 без сброса набора', d.ST.X, 65);
+
+  var e = core();
+  e.exec(0x06);
+  e.exec(0x0D);              /* Cx завершает набор */
+  e.exec(0x05);
+  expect('D: 6, Cx, 5 — набор сброшен', e.ST.X, 5);
+
+  /* ---------- вывод ---------- */
+  var html = '';
+  var groups = {
+    0: 'Модификация адреса',
+    15: 'Косвенный переход К БП n',
+    30: 'Сценарий A: R6 = 6',
+    32: 'Сценарий B: R6 = 5',
+    34: 'Сценарий C: R9 = 5',
+    36: 'Склейка цифр'
+  };
+  for (var i = 0; i < rows.length; i++) {
+    if (groups[i]) html += '<h2>' + groups[i] + '</h2>';
+    html += '<table><tr><th>Проверка</th><th>Ожидалось</th><th>Получено</th><th></th></tr>';
+    html += '<tr><td>' + rows[i][0] + '</td><td>' + rows[i][1] + '</td><td>' +
+            rows[i][2] + '</td><td class="' + (rows[i][3] ? 'ok' : 'no') + '">' +
+            (rows[i][3] ? '✅' : '❌') + '</td></tr></table>';
+  }
+
+  var all = pass + fail;
+  var s = document.getElementById('summary');
+  s.textContent = (fail === 0 ? 'Всё зелёное: ' : 'Есть расхождения: ') +
+                  pass + ' из ' + all + ' проверок';
+  if (fail) s.className = 'summary bad';
+  out.innerHTML = html;
+})();
+</script>
+</body>
+</html>
