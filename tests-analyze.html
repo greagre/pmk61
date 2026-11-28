@@ -34,7 +34,7 @@
 <body>
 
 <h1>Карта программы</h1>
-<div class="sub">analyze61.js v1 + codes-addr.js v3 — блоки, переходы, циклы. Проверки и разбор своих кодов.</div>
+<div class="sub">analyze61.js v2 + codes-addr.js v3 — блоки, переходы, циклы. Проверки и разбор своих кодов.</div>
 
 <div id="summary" class="sum">Идут проверки…</div>
 <table id="results"><thead><tr><th>Проверка</th><th>Ожидание</th><th>Факт</th><th></th></tr></thead><tbody></tbody></table>
@@ -42,8 +42,8 @@
 <h2>Разобрать свои коды</h2>
 <div class="note">Вводи коды через пробел: <code>51 00 00</code>. Пустые шаги (54) можно не писать.</div>
 <label class="mode"><input type="checkbox" id="journal" checked>
-  Журнальный адрес: писать переход одним числом — <code>5E 03</code> станет <code>5E 00 03</code></label>
-<textarea id="src">01 02 5E 03 01 02 03</textarea>
+  Журнальный адрес: писать переход одним числом — <code>5E 5</code> станет <code>5E 00 05</code></label>
+<textarea id="src">01 02 5E 5 01 02 03</textarea>
 <button id="btn">Разобрать</button>
 <pre id="addrnote" class="note">—</pre>
 
@@ -57,7 +57,7 @@
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
 <script src="codes-addr.js?v=3"></script>
-<script src="analyze61.js?v=1"></script>
+<script src="analyze61.js?v=2"></script>
 <script>
 (function () {
   'use strict';
@@ -69,6 +69,12 @@
     var p = prog.slice();
     while (p.length < (n || 105)) p.push(NOP);
     return p;
+  }
+
+  function num(n) {
+    n = Number(n) | 0;
+    if (n < 0) return '??';
+    return n < 10 ? '0' + n : String(n);
   }
 
   function eq(a, b) {
@@ -187,6 +193,34 @@
             aj.jumps.length === 1 && aj.jumps[0].target === 3);
     }
 
+    /* 16. Адрес, разрезавший трёхбайтную команду, объясняется словами.
+       5E на адресе 02 занимает 02–04, цель 3 попадает в его аргумент. */
+    a = A.analyze(pad([0x01, 0x02, 0x5E, 0x00, 0x03, 0x01, 0x02, 0x03]));
+    var inside = a.warnings.filter(function (w) { return w.kind === 'inside-cmd'; })[0];
+    check('Цель внутрь команды', 'подсказка «имелся в виду 05»',
+          inside ? inside.text.slice(0, 28) + '…' : 'замечания нет',
+          !!inside && inside.text.indexOf('имелся в виду 05') >= 0);
+
+    /* 17. Граф подписывает блок всеми командами, а не одной первой */
+    g = A.mermaid(A.analyze(pad([0x01, 0x02, 0x51, 0x00, 0x00])));
+    check('Подпись блока в графе', 'адреса и все команды',
+          (g.split('\n')[1] || '').slice(0, 34) + '…',
+          g.indexOf('00–02') >= 0 && g.indexOf('1, 2, БП') >= 0);
+
+    /* 18. Листинг показывает, сколько ячеек заняла команда */
+    var lst = A.listing(A.analyze(pad([0x01, 0x02, 0x51, 0x00, 0x00])));
+    check('Листинг с ячейками', 'у БП видно (02–04)',
+          lst.split('\n').length + ' строк',
+          lst.indexOf('(02–04)') >= 0);
+
+    /* 19. Отброшенный переход виден в «Переходах», а не только в замечаниях */
+    a = A.analyze(pad([0x51, 0x09, 0x09]));
+    var rep2 = A.report(a);
+    check('Отброшенный переход в отчёте', 'строка «не проведён»',
+          'skipped ' + a.skipped.length + ', edges ' + a.edges.length,
+          a.skipped.length === 1 && a.edges.length === 0 &&
+          rep2.indexOf('не проведён') >= 0);
+
     document.getElementById('summary').innerHTML =
       (passed === total ? '<span class="ok">' : '<span class="bad">') +
       'Проверок пройдено: ' + passed + ' из ' + total + '</span>';
@@ -227,7 +261,7 @@
       var res = decode(document.getElementById('src').value);
       an.textContent = notes(res);
       var a = window.MKAnalyze.analyze(res.bytes);
-      rep.textContent = window.MKAnalyze.report(a) + '\n\nЛистинг:\n' + window.MKDasm.text(res.bytes, { length: a.size });
+      rep.textContent = window.MKAnalyze.report(a) + '\n\nЛистинг:\n' + window.MKAnalyze.listing(a);
       gr.textContent = window.MKAnalyze.mermaid(a);
     } catch (e) {
       rep.textContent = 'Ошибка: ' + e.message;
