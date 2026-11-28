@@ -1,5 +1,5 @@
 /* =========================================================
-   pmk61 / analyze61.js
+   pmk61 / analyze61.js  v2
    «Карта программы»: разбор готового листинга для школьника.
 
    ЗАЧЕМ
@@ -39,6 +39,25 @@
    «К БП n» и «К ПП n» берут адрес из регистра, а не из ячеек.
    Какое там число, статически неизвестно: карта честно ставит
    предупреждение и не рисует стрелку в угаданное место.
+
+   ЧТО НОВОГО В v2 (после проверки на телефоне 15/15)
+
+   1. Адрес, попавший ВНУТРЬ трёхбайтной команды, больше не зовётся
+      просто «переход в никуда». Так бывает от невнимательности:
+      написали 5E 03, а команда занимает 02–04, и прыжок просит
+      встать на середину собственного адреса. Теперь в замечании
+      видно, какую команду адрес разрезал и куда, скорее всего,
+      метил автор: «вероятно, имелся в виду 05».
+   2. Отброшенный переход виден в отчёте: раньше внизу писало
+      «Замечания: 1», а в разделе «Переходы» стояло «нет».
+      Теперь он там есть с пометкой «не проведён».
+   3. Листинг показывает, сколько ячеек занимает команда:
+      «02  F x=0 → 03  (02–04)». Пропуск в нумерации адресов
+      перестаёт выглядеть ошибкой.
+   4. Граф mermaid подписывает блок всеми командами с адресами:
+      было «B0["0: 1"]» — одинокое «1», стало
+      «B0["00–02: 1, 2, F x=0 → 03"]». Вставленный в чат граф
+      теперь понятен без сверки с листингом.
    ========================================================= */
 (function (global) {
   'use strict';
@@ -52,6 +71,12 @@
 
   function has(obj, key) {
     return Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
+  function pad(n) {
+    n = Number(n) | 0;
+    if (n < 0) return '??';
+    return n < 10 ? '0' + n : String(n);
   }
 
   /* Адрес цели из двух ячеек: десятки, единицы.
@@ -98,6 +123,31 @@
       .trim();
   }
 
+  /* Строка, ВНУТРИ которой лежит адрес. Нужна только для
+     трёхбайтных команд: 5E 00 03 занимает 02–04, и адрес 3
+     попадает не на команду, а в её собственный аргумент. */
+  function rowCovering(rows, addr) {
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (r.len > 1 && addr > r.addr && addr < r.addr + r.len) return r;
+    }
+    return null;
+  }
+
+  /* Подпись блока для графа: диапазон адресов и ВСЕ команды.
+     Длинную подпись mermaid на телефоне разобрать нельзя,
+     поэтому тело обрезаем, но не до одной команды. */
+  function blockTitle(rows, b) {
+    var parts = [];
+    for (var q = b.fromIndex; q <= b.toIndex; q++) {
+      var r = rows[q];
+      if (!r || r.kind === 'nop') continue;
+      parts.push(String(r.text || '').replace(/\s+/g, ' ').trim());
+    }
+    var body = parts.length ? parts.join(', ') : 'пусто';
+    return pad(b.start) + '–' + pad(b.end) + ': ' + short(body, 46);
+  }
+
   /* analyze(prog, opts) →
      {
        size,            сколько ячеек занимает программа
@@ -107,6 +157,8 @@
        loops,           только обратные рёбра (настоящие циклы)
        warnings,        [{kind, addr, text}]
        jumps            все переходы с разобранными адресами
+       skipped,         переходы, которые НЕ проведены стрелкой,
+                        с причиной (в «Переходах» отчёта видны)
      } */
   function analyze(prog, opts) {
     var D = dasm();
@@ -128,6 +180,7 @@
 
     var jumps = [];
     var warnings = [];
+    var skipped = [];
     var starts = { '0': true };
 
     for (i = 0; i < rows.length; i++) {
@@ -179,7 +232,7 @@
         label: ''
       };
 
-      /* Подпись блока — первая содержательная строка. */
+      /* Короткая подпись блока для отчёта — первая содержательная строка. */
       for (var q = from; q <= to; q++) {
         if (rows[q].kind !== 'nop' && rows[q].kind !== 'jump') {
           b.label = short(rows[q].text, 24);
@@ -206,15 +259,35 @@
           addr: jj.addr,
           text: 'адрес берётся из регистра: ' + jj.name
         });
+        skipped.push({
+          from: fromBlock, addr: jj.addr, target: -1, name: jj.name,
+          kind: jj.kind, why: 'адрес из регистра, статически неизвестен'
+        });
         continue;
       }
 
       if (jj.target < 0 || !has(idx, jj.target)) {
-        warnings.push({
-          kind: 'dangling',
-          addr: jj.addr,
-          text: 'переход в никуда: ' + jj.name + ' → ' +
-                (jj.target < 0 ? '?' : jj.target)
+        /* Прежде чем звать это «никуда», проверим: может, адрес
+           разрезал трёхбайтную команду. Тогда подскажем, куда
+           метил автор — на первый адрес после этой команды. */
+        var cov = jj.target >= 0 ? rowCovering(rows, jj.target) : null;
+        var why;
+
+        if (cov) {
+          var after = cov.addr + cov.len;
+          why = 'цель ' + pad(jj.target) + ' попадает внутрь команды на адресе ' +
+                pad(cov.addr) + ' (занимает ' + pad(cov.addr) + '–' + pad(after - 1) +
+                '); вероятно, имелся в виду ' + pad(after);
+          warnings.push({ kind: 'inside-cmd', addr: jj.addr, target: jj.target, text: why });
+        } else {
+          why = 'переход в никуда: ' + jj.name + ' → ' +
+                (jj.target < 0 ? '?' : pad(jj.target));
+          warnings.push({ kind: 'dangling', addr: jj.addr, target: jj.target, text: why });
+        }
+
+        skipped.push({
+          from: fromBlock, addr: jj.addr, target: jj.target, name: jj.name,
+          kind: jj.kind, why: why
         });
         continue;
       }
@@ -226,7 +299,7 @@
         warnings.push({
           kind: 'inside',
           addr: jj.addr,
-          text: 'переход в середину блока, адрес ' + jj.target
+          text: 'переход в середину блока, адрес ' + pad(jj.target)
         });
       }
 
@@ -262,19 +335,21 @@
       edges: edges,
       loops: loops,
       warnings: warnings,
-      jumps: jumps
+      jumps: jumps,
+      skipped: skipped
     };
   }
 
   /* Граф для mermaid: его видно и в чате Honer AI, и на mermaid.live.
-     Подписи короткие: длинная подпись ломает отрисовку на телефоне. */
+     Подпись блока — адреса и все команды, иначе в чате остаётся
+     одинокое «1» и граф ничего не объясняет. */
   function mermaid(a) {
     var out = ['graph TD'];
     var i;
 
     for (i = 0; i < a.blocks.length; i++) {
       var b = a.blocks[i];
-      out.push('  B' + b.n + '["' + esc(b.start + ': ' + b.label) + '"]');
+      out.push('  B' + b.n + '["' + esc(blockTitle(a.rows, b)) + '"]');
     }
 
     for (i = 0; i < a.edges.length; i++) {
@@ -283,6 +358,19 @@
       out.push('  B' + e.from + ' -->|' + esc(lbl) + '| B' + e.to);
     }
 
+    return out.join('\n');
+  }
+
+  /* Листинг с занятыми ячейками: у трёхбайтной команды справа
+     видно, сколько места она съела. Так пропуск «02 → 05» в
+     нумерации адресов не выглядит ошибкой. */
+  function listing(a) {
+    var out = [];
+    for (var i = 0; i < a.rows.length; i++) {
+      var r = a.rows[i];
+      var span = r.len > 1 ? '  (' + pad(r.addr) + '–' + pad(r.addr + r.len - 1) + ')' : '';
+      out.push(pad(r.addr) + '  ' + r.text + span);
+    }
     return out.join('\n');
   }
 
@@ -302,11 +390,20 @@
 
     lines.push('');
     lines.push('Переходы:');
-    if (!a.edges.length) lines.push('  нет');
+    var sk = a.skipped || [];
+    if (!a.edges.length && !sk.length) lines.push('  нет');
     for (i = 0; i < a.edges.length; i++) {
       var e = a.edges[i];
       lines.push('  ' + pad(e.addr) + '  ' + e.name + ' → ' + pad(e.target) +
                  '  (Б' + e.from + ' → Б' + e.to + ')' + (e.back ? '  цикл' : ''));
+    }
+    /* Отброшенные переходы тоже видны — иначе внизу стоит
+       «Замечания: 1», а здесь «нет», и это сбивает с толку. */
+    for (i = 0; i < sk.length; i++) {
+      var s = sk[i];
+      lines.push('  ' + pad(s.addr) + '  ' + s.name + ' → ' +
+                 (s.target < 0 ? '?' : pad(s.target)) +
+                 '  (не проведён, Б' + s.from + ' — см. «Замечания»)');
     }
 
     lines.push('');
@@ -327,16 +424,12 @@
     return lines.join('\n');
   }
 
-  function pad(n) {
-    n = Number(n) | 0;
-    if (n < 0) return '??';
-    return n < 10 ? '0' + n : String(n);
-  }
-
   global.MKAnalyze = {
     analyze: analyze,
     mermaid: mermaid,
     report: report,
+    listing: listing,
+    blockTitle: blockTitle,
     targetOf: targetOf,
     nameOf: nameOf,
     kindOf: kindOf
