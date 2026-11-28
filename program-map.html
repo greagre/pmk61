@@ -39,10 +39,6 @@
 
   svg.map { width: 100%; height: auto; display: block; background: #fbfcfd;
             border: 1px solid #e6e9ee; border-radius: 10px; }
-  text.bt { font: 700 11px system-ui, sans-serif; fill: #5b6270; }
-  text.ra { font: 11px ui-monospace, Menlo, monospace; fill: #9aa1ad; }
-  text.rc { font: 12px ui-monospace, Menlo, monospace; fill: #1c1f24; }
-  text.elab { font: 10px system-ui, sans-serif; }
 
   .blk { border: 1px solid #e2e5ea; border-radius: 10px; overflow: hidden;
          margin-bottom: 9px; background: #fff; }
@@ -52,6 +48,9 @@
          font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
   .row .a { color: #9aa1ad; min-width: 22px; }
   .row .c { color: #1c1f24; }
+  .row .cells { color: #9aa1ad; font-size: 12px; }
+  .row.addr { padding-top: 0; }
+  .row.addr .a, .row.addr .c { color: #9aa1ad; font-size: 12px; }
   .jump { font-size: 12px; padding: 5px 10px 6px 42px; color: #24468f;
           background: #eef2fb; border-top: 1px dashed #d5deef; }
   .jump.back { color: #a35f06; background: #fff5e6; border-top-color: #f0d8b4; }
@@ -98,22 +97,24 @@
 <div id="out"></div>
 
 <div class="card">
-  <button class="btn2" id="mmBtn">Показать граф mermaid</button>
+  <button class="btn2" id="mmBtn">Скопировать граф для чата</button>
   <div id="mmBox"></div>
 </div>
 
-<div class="foot">Открывать со <code>?v=4</code>, иначе браузер покажет старую версию из кэша.</div>
+<div class="foot">Открывать со <code>?v=5</code>, иначе браузер покажет старую версию из кэша.</div>
 
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
-<script src="analyze61.js?v=1"></script>
+<script src="analyze61.js?v=2"></script>
 <script src="codes-addr.js?v=3"></script>
+<script src="map-view.js?v=2"></script>
 <script>
 (function () {
   'use strict';
 
   var A = window.MKCodeAddr;
   var AN = window.MKAnalyze;
+  var MV = window.MKMap;
 
   var ta = document.getElementById('ta');
   var ex = document.getElementById('ex');
@@ -130,7 +131,7 @@
   var EX = {
     loop: '01 02 51 0',
     cond: '5A 06 01 02 03 50',
-    fl0:  '5E 03 01 02 51 0'
+    fl0:  '5E 05 01 02 51 0'
   };
 
   var view = 'map';
@@ -147,85 +148,9 @@
     return n < 10 ? '0' + n : String(n);
   }
 
-  function fallsThrough(an, b) {
-    var r = an.rows[b.toIndex];
-    if (!r) return true;
-    if (r.kind !== 'jump') return true;
-    var k = AN.kindOf(r);
-    return !(k === 'jump' || k === 'indirect');
-  }
-
-  /* ---------- блок-схема ---------- */
-  function drawMap(an) {
-    var blocks = an.blocks;
-    if (!blocks.length) return '<div class="msg">Участков нет.</div>';
-
-    var BW = 210, X0 = 14, LH = 16, GAP = 28, HEAD = 22;
-    var y = 14, i, b;
-
-    for (i = 0; i < blocks.length; i++) {
-      b = blocks[i];
-      b._n = b.toIndex - b.fromIndex + 1;
-      b._h = HEAD + b._n * LH + 8;
-      b._y = y;
-      y += b._h + GAP;
-    }
-
-    var H = y - GAP + 14;
-    var lanes = Math.max(1, Math.min(an.edges.length, 9));
-    var step = 15;
-    var W = X0 + BW + 22 + lanes * step + 30;
-
-    var s = [];
-    s.push('<svg class="map" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMin meet" xmlns="http://www.w3.org/2000/svg">');
-    s.push('<defs>' +
-      '<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f6fed"/></marker>' +
-      '<marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d97a10"/></marker>' +
-      '</defs>');
-
-    /* проваливание вниз */
-    for (i = 0; i + 1 < blocks.length; i++) {
-      if (!fallsThrough(an, blocks[i])) continue;
-      var cx = X0 + BW / 2;
-      s.push('<line x1="' + cx + '" y1="' + (blocks[i]._y + blocks[i]._h) +
-             '" x2="' + cx + '" y2="' + (blocks[i + 1]._y - 2) +
-             '" stroke="#9aa1ad" stroke-width="1.4" marker-end="url(#ar)"/>');
-    }
-
-    /* переходы сбоку */
-    for (i = 0; i < an.edges.length; i++) {
-      var e = an.edges[i];
-      var src = blocks[e.from], dst = blocks[e.to];
-      if (!src || !dst) continue;
-      var lx = X0 + BW + 20 + (i % lanes) * step;
-      var y1 = src._y + src._h - 9;
-      var y2 = dst._y + 9;
-      var col = e.back ? '#d97a10' : '#2f6fed';
-      var d = 'M' + (X0 + BW) + ',' + y1 + ' H' + lx + ' V' + y2 + ' H' + (X0 + BW + 2);
-      s.push('<path d="' + d + '" fill="none" stroke="' + col +
-             '" stroke-width="1.6" marker-end="url(#' + (e.back ? 'ab' : 'ar') + ')"/>');
-      s.push('<text class="elab" x="' + (lx + 4) + '" y="' + ((y1 + y2) / 2) +
-             '" fill="' + col + '">' + esc(e.back ? 'назад' : e.name) + '</text>');
-    }
-
-    /* прямоугольники с командами */
-    for (i = 0; i < blocks.length; i++) {
-      b = blocks[i];
-      s.push('<rect x="' + X0 + '" y="' + b._y + '" width="' + BW + '" height="' + b._h +
-             '" rx="8" fill="#fff" stroke="#cfd4dc" stroke-width="1.2"/>');
-      s.push('<text class="bt" x="' + (X0 + 9) + '" y="' + (b._y + 15) + '">Участок ' +
-             (b.n + 1) + ' · ' + pad(b.start) + '–' + pad(b.end) + '</text>');
-      for (var q = b.fromIndex; q <= b.toIndex; q++) {
-        var r = an.rows[q];
-        if (!r) continue;
-        var yy = b._y + HEAD + 2 + (q - b.fromIndex) * LH;
-        s.push('<text class="ra" x="' + (X0 + 9) + '" y="' + yy + '">' + pad(r.addr) + '</text>');
-        s.push('<text class="rc" x="' + (X0 + 36) + '" y="' + yy + '">' + esc(r.text || '—') + '</text>');
-      }
-    }
-
-    s.push('</svg>');
-    return s.join('');
+  function lastCellOf(an, b) {
+    if (MV && MV.lastCell) return MV.lastCell(an, b);
+    return b.end;
   }
 
   /* ---------- листинг ---------- */
@@ -235,18 +160,32 @@
     for (var i = 0; i < an.blocks.length; i++) {
       var b = an.blocks[i];
       h.push('<div class="blk"><div class="bh">Участок ' + (b.n + 1) +
-             ' · адреса ' + pad(b.start) + '–' + pad(b.end) + '</div>');
+             ' · адреса ' + pad(b.start) + '–' + pad(lastCellOf(an, b)) + '</div>');
       for (var q = b.fromIndex; q <= b.toIndex; q++) {
         var r = an.rows[q];
         if (!r) continue;
+        var len = (r.len > 0) ? r.len : 1;
+        var cells = (len > 1)
+          ? ' <span class="cells">(' + pad(r.addr) + '–' + pad(r.addr + len - 1) + ')</span>'
+          : '';
         h.push('<div class="row"><span class="a">' + pad(r.addr) +
-               '</span><span class="c">' + esc(r.text || '—') + '</span></div>');
+               '</span><span class="c">' + esc(r.text || '—') + cells + '</span></div>');
+        if (len > 1) {
+          var shownAs = false;
+          for (var k = b.fromIndex; k <= b.toIndex; k++) {
+            if (an.rows[k] && an.rows[k].addr === r.addr + 1) shownAs = true;
+          }
+          if (!shownAs) {
+            h.push('<div class="row addr"><span class="a">' + pad(r.addr + 1) + '–' +
+                   pad(r.addr + len - 1) + '</span><span class="c">адрес перехода</span></div>');
+          }
+        }
       }
-      for (var k = 0; k < an.edges.length; k++) {
-        var e = an.edges[k];
-        if (e.from !== b.n) continue;
-        h.push('<div class="jump' + (e.back ? ' back' : '') + '">' +
-               (e.back ? '↺ назад на ' : '→ на ') + pad(e.target) + ' · ' + esc(e.name) + '</div>');
+      for (var e = 0; e < an.edges.length; e++) {
+        var ed = an.edges[e];
+        if (ed.from !== b.n) continue;
+        h.push('<div class="jump' + (ed.back ? ' back' : '') + '">' +
+               (ed.back ? '↺ назад на ' : '→ на ') + pad(ed.target) + ' · ' + esc(ed.name) + '</div>');
       }
       h.push('</div>');
     }
@@ -303,8 +242,13 @@
       return;
     }
 
-    html += (view === 'map') ? drawMap(an) : drawList(an);
+    html += (view === 'map') ? '<div id="mapBox"></div>' : drawList(an);
     out.innerHTML = html;
+
+    if (view === 'map') {
+      var box = document.getElementById('mapBox');
+      if (box) MV.render(box, an, { width: (out.clientWidth || 340) - 10 });
+    }
   }
 
   function setView(v) {
@@ -325,8 +269,17 @@
 
   mmBtn.onclick = function () {
     if (!last) { mmBox.innerHTML = '<div class="msg">Сначала введите программу.</div>'; return; }
-    mmBox.innerHTML = '<pre class="mm">' + esc(AN.mermaid(last)) + '</pre>' +
-      '<div class="hint">Скопируйте и вставьте в чат Honer AI — он нарисует граф картинкой.</div>';
+    var text = (AN.mermaid ? AN.mermaid(last) : MV.mermaid(last));
+    var ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch (e) { ok = false; }
+    mmBox.innerHTML = '<pre class="mm">' + esc(text) + '</pre>' +
+      '<div class="hint">' + (ok ? 'Скопировано. ' : '') +
+      'Вставьте в чат Honer AI — он нарисует граф картинкой.</div>';
   };
 
   ta.value = EX.loop;
