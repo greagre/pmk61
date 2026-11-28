@@ -7,7 +7,7 @@
 <style>
   body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#111;color:#ddd}
   h1{font-size:17px;margin:0 0 4px}
-  p.note{font-size:12px;color:#888;margin:0 0 12px}
+  p.note{font-size:12px;color:#888;margin:0 0 12px;line-height:1.5}
   h2{font-size:14px;margin:16px 0 6px;color:#8fc}
   table{border-collapse:collapse;width:100%;font-size:12px;font-family:ui-monospace,monospace}
   th,td{border:1px solid #333;padding:3px 6px;text-align:left;white-space:nowrap}
@@ -15,7 +15,7 @@
   td.num{text-align:right}
   tr.bad td{color:#f88}
   tr.good td{color:#8f8}
-  .box{border:1px solid #333;border-radius:8px;padding:8px 10px;margin:10px 0}
+  .box{border:1px solid #333;border-radius:8px;padding:8px 10px;margin:10px 0;line-height:1.5}
   .big{font-size:13px}
   code{font-family:ui-monospace,monospace;color:#cfa}
 </style>
@@ -23,14 +23,16 @@
 <body>
 <h1>Извлечение X1 (F Вx) — подъём стека</h1>
 <p class="note">
-Программа: <code>5</code> · <code>1</code> · <code>+</code> · <code>F Вx</code> · <code>С/П</code><br>
-Сложение даёт X = 6, а прежнее X (единица) копируется в X1.<br>
-По руководству <code>F Вx</code> поднимает стек: 6 уходит в Y, а в X встаёт 1.<br>
-core.js просто меняет X и X1 местами — тогда Y остаётся нулём.
+Версия 2. В первой версии программы были набраны как <code>5</code> <code>1</code> <code>+</code> —
+цифры склеились в 51, и тест показывал чушь. Теперь между числами стоит <code>В↑</code>, как и положено.<br>
+По руководству <code>F Вx</code> поднимает стек: прежнее X уходит в Y, а в X встаёт значение из X1.<br>
+<code>core.js</code> просто меняет X и X1 местами — тогда Y остаётся нулём.
 </p>
 
 <div id="out"></div>
 <div id="arith"></div>
+<div id="glue"></div>
+<div id="sqrt"></div>
 
 <script src="core.js"></script>
 <script src="x1-fix.js"></script>
@@ -40,30 +42,28 @@ var OPTS = {
   hasK: true, addrHigh: true, addrHighFirst: 100, addrHighLast: 104
 };
 
-/* 00: 5, 01: 1, 02: +, 03: F Вx, 04: С/П */
-function progX1() {
+/* Коды: 0x0E В↑, 0x0F F Вx, 0x10 +, 0x21 √, 0x50 С/П, 0x54 К НОП */
+function prog(seq) {
   var p = new Array(105).fill(0x54);
-  p[0] = 0x05;
-  p[1] = 0x01;
-  p[2] = 0x10;
-  p[3] = 0x0F;
-  p[4] = 0x50;
+  for (var i = 0; i < seq.length; i++) p[i] = seq[i];
   return p;
 }
 
-/* 00: 2, 01: 3, 02: +, 03: С/П — арифметика не должна испортиться */
-function progSum() {
-  var p = new Array(105).fill(0x54);
-  p[0] = 0x02;
-  p[1] = 0x03;
-  p[2] = 0x10;
-  p[3] = 0x50;
-  return p;
-}
+/* 5 В↑ 1 + F Вx С/П  → X=1, Y=6 */
+function progX1() { return prog([0x05, 0x0E, 0x01, 0x10, 0x0F, 0x50]); }
 
-function run(factory, prog) {
+/* 2 В↑ 3 + С/П  → X=5 */
+function progSum() { return prog([0x02, 0x0E, 0x03, 0x10, 0x50]); }
+
+/* 5 1 + С/П  → X=51 (цифры склеиваются — так и должно быть) */
+function progGlue() { return prog([0x05, 0x01, 0x10, 0x50]); }
+
+/* 7 √ F Вx С/П  → X=7, Y≈2,6457 */
+function progSqrt() { return prog([0x07, 0x21, 0x0F, 0x50]); }
+
+function run(factory, p) {
   var core = factory(OPTS);
-  core.setProgram(prog);
+  core.setProgram(p);
   var res = core.run(100);
   return {
     x: core.ST.X, y: core.ST.Y, z: core.ST.Z, t: core.ST.T,
@@ -83,6 +83,7 @@ function row(title, r, good) {
     '</tr>';
 }
 
+/* ---------- главная проверка ---------- */
 var withoutFix = run(MKCore.__origCreate, progX1());
 var withFix = run(MKCore.create, progX1());
 
@@ -107,26 +108,57 @@ h += '<div class="box big">' +
 h += '<h2>Что видно в строках</h2>';
 h += '<div class="box">' +
   '<div>• <b>Без слоя</b>: X = ' + withoutFix.x + ', Y = ' + withoutFix.y +
-  ' — это простой обмен X и X1, подъёма нет.</div>' +
+  ' — простой обмен X и X1, подъёма нет.</div>' +
   '<div>• <b>Со слоем</b>: X = ' + withFix.x + ', Y = ' + withFix.y +
   ' — прежнее X сохранено в стеке, как на железе.</div>' +
   '</div>';
 
 document.getElementById('out').innerHTML = h;
 
-/* Контроль: обычное сложение не должно пострадать от слоя. */
+/* ---------- контроль 1: арифметика ---------- */
 (function () {
   var r = run(MKCore.create, progSum());
   var good = (r.x === 5 && r.result === 'stop');
   document.getElementById('arith').innerHTML =
     '<h2>Слой не ломает арифметику</h2>' +
-    '<table><tr><th>Прогон</th><th>X</th><th>Шагов</th><th>Итог</th><th>Вывод</th></tr>' +
+    '<table><tr><th>Программа</th><th>X</th><th>Шагов</th><th>Итог</th><th>Вывод</th></tr>' +
     '<tr class="' + (good ? 'good' : 'bad') + '">' +
-    '<td>2 3 + С/П</td>' +
+    '<td>2 В↑ 3 + С/П</td>' +
     '<td class="num">' + r.x + '</td>' +
     '<td class="num">' + r.steps + '</td>' +
     '<td>' + r.result + '</td>' +
     '<td>' + (good ? '✔ 5, как должно' : '✘ ожидалось 5, получено ' + r.x) + '</td>' +
+    '</tr></table>';
+})();
+
+/* ---------- контроль 2: склейка цифр ---------- */
+(function () {
+  var r = run(MKCore.create, progGlue());
+  var good = (r.x === 51);
+  document.getElementById('glue').innerHTML =
+    '<h2>Цифры по-прежнему склеиваются</h2>' +
+    '<table><tr><th>Программа</th><th>X</th><th>Вывод</th></tr>' +
+    '<tr class="' + (good ? 'good' : 'bad') + '">' +
+    '<td>5 1 + С/П</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td>' + (good ? '✔ 51 — так и должно быть' : '✘ ожидалось 51, получено ' + r.x) + '</td>' +
+    '</tr></table>' +
+    '<div class="box">Это не ошибка, а поведение настоящей МК-61: без разделителя ' +
+    'вторая цифра приклеивается к первой. Именно на этом спотыкалась первая версия теста.</div>';
+})();
+
+/* ---------- контроль 3: живой случай с корнем ---------- */
+(function () {
+  var r = run(MKCore.create, progSqrt());
+  var good = (Math.abs(r.x - 7) < 1e-9 && Math.abs(r.y - Math.sqrt(7)) < 1e-6);
+  document.getElementById('sqrt').innerHTML =
+    '<h2>Живой случай: 7 √ F Вx</h2>' +
+    '<table><tr><th>Программа</th><th>X</th><th>Y</th><th>Вывод</th></tr>' +
+    '<tr class="' + (good ? 'good' : 'bad') + '">' +
+    '<td>7 √ F Вx С/П</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.y + '</td>' +
+    '<td>' + (good ? '✔ 7 вернулось, √7 осталось в Y' : '✘ ожидалось X=7, Y≈2,6457') + '</td>' +
     '</tr></table>';
 })();
 </script>
