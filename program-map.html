@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Карта программы — загогулина и список</title>
+<title>Карта программы — блок-схема и листинг</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -23,6 +23,8 @@
              border-radius: 10px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
   .msg { font-size: 13px; margin-top: 8px; opacity: .8; }
   .msg .bad { color: #c0392b; }
+  .vname { font-size: 13px; margin-top: 10px; opacity: .8; }
+  .vname b { font-weight: 600; }
   .empty { padding: 24px; text-align: center; opacity: .6; }
   svg.map { display: block; width: 100%; height: auto; }
   .list { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13.5px; }
@@ -45,13 +47,14 @@
 <body>
 
 <h1>Карта программы</h1>
-<div class="sub">Два вида одной и той же карты: «Загогулина» — прямоугольники сбоку соединены линиями, «Списком» — команды построчно со стрелками. Показывают структуру, а не смысл: считать всё равно эмулятору.</div>
+<div class="sub">Одна и та же программа в двух видах: <b>блок-схема</b> — прямоугольники с командами и переходы линиями сбоку, <b>листинг</b> — команды построчно с адресами. Оба вида показывают устройство, а не смысл: считать всё равно эмулятору.</div>
 
 <div class="card">
   <div class="row">
-    <button id="viewMap" class="on">Загогулина</button>
-    <button id="viewList">Списком</button>
+    <button id="viewMap" class="on" title="Блок-схема">Схема</button>
+    <button id="viewList" title="Листинг — список команд">Листинг</button>
   </div>
+  <div class="vname" id="vname"></div>
 
   <textarea id="src" spellcheck="false">01 02 51 00 00</textarea>
 
@@ -83,6 +86,11 @@
   var NS = 'http://www.w3.org/2000/svg';
   var NOP = 0x54;
   var view = 'map';
+
+  var VNAME = {
+    map:  '<b>Блок-схема:</b> команды в прямоугольниках, переход — линия сбоку, обратный переход помечен ↺.',
+    list: '<b>Листинг:</b> команды построчно с адресами, под каждым переходом подпись, куда он ведёт.'
+  };
 
   var EX = {
     loop: '01 02 51 00 00',
@@ -139,7 +147,7 @@
     return j.kind !== 'jump';
   }
 
-  /* ---------- вид 1: загогулина ---------- */
+  /* ---------- вид 1: блок-схема ---------- */
 
   function drawMap(A) {
     var BW = 190, X0 = 16, PAD = 12, RH = 20, GAP = 34;
@@ -244,7 +252,7 @@
     return wrap;
   }
 
-  /* ---------- вид 2: списком ---------- */
+  /* ---------- вид 2: листинг ---------- */
 
   function drawList(A) {
     var wrap = document.createElement('div');
@@ -361,6 +369,7 @@
     view = v;
     $('viewMap').className = (v === 'map') ? 'on' : '';
     $('viewList').className = (v === 'list') ? 'on' : '';
+    $('vname').innerHTML = VNAME[v] || '';
     render();
   }
 
@@ -379,7 +388,7 @@
 
   $('src').addEventListener('input', render);
 
-  render();
+  setView('map');
 })();
 </script>
 
