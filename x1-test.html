@@ -23,19 +23,21 @@
 <body>
 <h1>Извлечение X1 (F Вx) — подъём стека</h1>
 <p class="note">
-Версия 2. В первой версии программы были набраны как <code>5</code> <code>1</code> <code>+</code> —
-цифры склеились в 51, и тест показывал чушь. Теперь между числами стоит <code>В↑</code>, как и положено.<br>
-По руководству <code>F Вx</code> поднимает стек: прежнее X уходит в Y, а в X встаёт значение из X1.<br>
-<code>core.js</code> просто меняет X и X1 местами — тогда Y остаётся нулём.
+Версия 3. Исправлены <b>ожидания</b> теста, а не слой: подъём стека обязан уводить прежнее Y в Z,
+поэтому Z = 5 — это правильно. В версии 2 проверка требовала Z = 0 и ругалась на работающий слой.<br>
+В версии 1 программы были набраны как <code>5</code> <code>1</code> <code>+</code> — цифры склеивались в 51.<br>
+По руководству <code>F Вx</code> поднимает стек: прежнее X уходит в Y, а в X встаёт значение из X1.
 </p>
 
+<div id="exp"></div>
 <div id="out"></div>
 <div id="arith"></div>
 <div id="glue"></div>
 <div id="sqrt"></div>
+<div id="repeat"></div>
 
-<script src="core.js"></script>
-<script src="x1-fix.js"></script>
+<script src="core.js?v=14"></script>
+<script src="x1-fix.js?v=1"></script>
 <script>
 var OPTS = {
   progLen: 105, regCount: 15, nop: 0x54, maxDig: 8,
@@ -49,8 +51,11 @@ function prog(seq) {
   return p;
 }
 
-/* 5 В↑ 1 + F Вx С/П  → X=1, Y=6 */
+/* 5 В↑ 1 + F Вx С/П */
 function progX1() { return prog([0x05, 0x0E, 0x01, 0x10, 0x0F, 0x50]); }
+
+/* 5 В↑ 1 + F Вx F Вx С/П — повторное извлечение */
+function progX1twice() { return prog([0x05, 0x0E, 0x01, 0x10, 0x0F, 0x0F, 0x50]); }
 
 /* 2 В↑ 3 + С/П  → X=5 */
 function progSum() { return prog([0x02, 0x0E, 0x03, 0x10, 0x50]); }
@@ -83,12 +88,25 @@ function row(title, r, good) {
     '</tr>';
 }
 
+/* ---------- таблица ожиданий ---------- */
+var exp = '<h2>Что должно быть</h2>' +
+  '<table>' +
+  '<tr><th>Прогон</th><th>X</th><th>Y</th><th>Z</th><th>T</th><th>X1</th><th>Почему</th></tr>' +
+  '<tr><td>без слоя</td><td class="num">1</td><td class="num">5</td><td class="num">0</td><td class="num">0</td><td class="num">6</td>' +
+  '<td>обмен X↔X1, подъёма нет</td></tr>' +
+  '<tr><td>со слоем</td><td class="num">1</td><td class="num">6</td><td class="num">5</td><td class="num">0</td><td class="num">1</td>' +
+  '<td>подъём: 6→Y, 5→Z</td></tr>' +
+  '</table>';
+document.getElementById('exp').innerHTML = exp;
+
 /* ---------- главная проверка ---------- */
 var withoutFix = run(MKCore.__origCreate, progX1());
 var withFix = run(MKCore.create, progX1());
 
-var okOld = (withoutFix.x === 1 && withoutFix.y === 0);
-var okNew = (withFix.x === 1 && withFix.y === 6 && withFix.z === 0 && withFix.t === 0);
+var okOld = (withoutFix.x === 1 && withoutFix.y === 5 && withoutFix.z === 0 &&
+             withoutFix.t === 0 && withoutFix.x1 === 6);
+var okNew = (withFix.x === 1 && withFix.y === 6 && withFix.z === 5 &&
+             withFix.t === 0 && withFix.x1 === 1);
 
 var h = '';
 h += '<h2>Результат</h2>';
@@ -100,17 +118,17 @@ h += '<table>' +
 
 h += '<div class="box big">' +
   (okNew
-    ? '<b>Слой работает:</b> после <code>F Вx</code> в X встала единица, а прежнее X = 6 поднялось в Y.'
-    : '<b>Слой не сработал:</b> ожидалось X = 1 и Y = 6, получено X = ' + withFix.x +
-      ', Y = ' + withFix.y + ', Z = ' + withFix.z + ', T = ' + withFix.t + '.') +
+    ? '<b>Слой работает:</b> в X встала единица из X1, прежнее X = 6 поднялось в Y, а прежнее Y = 5 уехало в Z — ровно как на железе.'
+    : '<b>Слой не сработал:</b> ожидалось X=1, Y=6, Z=5, T=0. Получено X=' + withFix.x +
+      ', Y=' + withFix.y + ', Z=' + withFix.z + ', T=' + withFix.t + '.') +
   '</div>';
 
 h += '<h2>Что видно в строках</h2>';
 h += '<div class="box">' +
   '<div>• <b>Без слоя</b>: X = ' + withoutFix.x + ', Y = ' + withoutFix.y +
-  ' — простой обмен X и X1, подъёма нет.</div>' +
-  '<div>• <b>Со слоем</b>: X = ' + withFix.x + ', Y = ' + withFix.y +
-  ' — прежнее X сохранено в стеке, как на железе.</div>' +
+  ', X1 = ' + withoutFix.x1 + ' — простой обмен X и X1, прежнее X уехало в X1, стек не тронут.</div>' +
+  '<div>• <b>Со слоем</b>: X = ' + withFix.x + ', Y = ' + withFix.y + ', Z = ' + withFix.z +
+  ', X1 = ' + withFix.x1 + ' — подъём сработал, прежнее X сохранено в стеке.</div>' +
   '</div>';
 
 document.getElementById('out').innerHTML = h;
@@ -160,6 +178,23 @@ document.getElementById('out').innerHTML = h;
     '<td class="num">' + r.y + '</td>' +
     '<td>' + (good ? '✔ 7 вернулось, √7 осталось в Y' : '✘ ожидалось X=7, Y≈2,6457') + '</td>' +
     '</tr></table>';
+})();
+
+/* ---------- контроль 4: повторное извлечение ---------- */
+(function () {
+  var r = run(MKCore.create, progX1twice());
+  document.getElementById('repeat').innerHTML =
+    '<h2>Повторное F Вx</h2>' +
+    '<table><tr><th>Программа</th><th>X</th><th>Y</th><th>Z</th><th>X1</th></tr>' +
+    '<tr><td>5 В↑ 1 + F Вx F Вx С/П</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.y + '</td>' +
+    '<td class="num">' + r.z + '</td>' +
+    '<td class="num">' + r.x1 + '</td>' +
+    '</tr></table>' +
+    '<div class="box">Справочно, без оценки: слой оставляет в X1 извлечённое значение, ' +
+    'поэтому повторное нажатие возвращает то же число. Как ведёт себя железо — ' +
+    'в руководстве прямо не сказано, проверим отдельно.</div>';
 })();
 </script>
 </body>
