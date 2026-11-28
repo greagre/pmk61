@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карта программы — загогулина и список</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         margin: 0; padding: 14px; line-height: 1.45; background: #f7f7f8; color: #1b1b1f; }
+  @media (prefers-color-scheme: dark) { body { background: #16161a; color: #e8e8ee; } }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  .sub { opacity: .72; font-size: 13px; margin-bottom: 14px; }
+  .card { border: 1px solid rgba(128,128,128,.3); border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button { font-size: 14px; padding: 9px 14px; border-radius: 10px; cursor: pointer;
+           border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  button.on { background: #2f6fed; border-color: #2f6fed; color: #fff; }
+  button.ghost { font-size: 13px; padding: 7px 11px; opacity: .85; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 70px; margin-top: 10px;
+             font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; padding: 10px;
+             border-radius: 10px; border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit; }
+  .msg { font-size: 13px; margin-top: 8px; opacity: .8; }
+  .msg .bad { color: #c0392b; }
+  .empty { padding: 24px; text-align: center; opacity: .6; }
+  svg.map { display: block; width: 100%; height: auto; }
+  .list { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13.5px; }
+  .bhead { margin: 14px 0 4px; font-family: system-ui, sans-serif; font-size: 12px;
+           opacity: .6; text-transform: uppercase; letter-spacing: .04em; }
+  .cmd { display: flex; gap: 10px; padding: 3px 6px; border-radius: 6px; }
+  .cmd .a { opacity: .55; width: 2.2em; }
+  .cmd.j { background: rgba(47,111,237,.10); }
+  .jump { margin: 2px 0 10px 2.4em; font-family: system-ui, sans-serif; font-size: 12.5px; color: #2f6fed; }
+  .jump.back { color: #d97a10; }
+  .note { font-size: 13px; opacity: .75; margin-top: 14px; }
+  .warn { font-size: 13px; margin: 6px 0; padding: 8px 10px; border-radius: 8px;
+          background: rgba(217,122,16,.12); border-left: 3px solid #d97a10; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; opacity: .8; margin: 8px 0 4px; }
+  .legend span::before { content: "■ "; }
+  .legend .f::before { color: #2f6fed; }
+  .legend .b::before { color: #d97a10; }
+</style>
+</head>
+<body>
+
+<h1>Карта программы</h1>
+<div class="sub">Два вида одной и той же карты: «Загогулина» — прямоугольники сбоку соединены линиями, «Списком» — команды построчно со стрелками. Показывают структуру, а не смысл: считать всё равно эмулятору.</div>
+
+<div class="card">
+  <div class="row">
+    <button id="viewMap" class="on">Загогулина</button>
+    <button id="viewList">Списком</button>
+  </div>
+
+  <textarea id="src" spellcheck="false">01 02 51 00 00</textarea>
+
+  <div class="row" style="margin-top:10px">
+    <button id="btnRun">Разобрать</button>
+    <button class="ghost" data-ex="loop">Вечный цикл</button>
+    <button class="ghost" data-ex="cond">Ветвление</button>
+    <button class="ghost" data-ex="f0">С командой F0</button>
+  </div>
+
+  <div class="msg" id="msg"></div>
+</div>
+
+<div id="out"></div>
+<div id="about"></div>
+
+<div class="note">
+  Коды — парами через пробел: <code>5D 03</code>. Одиночная цифра тоже понятна: <code>5</code> = <code>05</code>.
+  Переход занимает три ячейки (код, десятки, единицы), команда <code>F0 21</code> — две.
+</div>
+
+<script src="core.js?v=14"></script>
+<script src="disasm61.js?v=8"></script>
+<script src="analyze61.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+
+  var NS = 'http://www.w3.org/2000/svg';
+  var NOP = 0x54;
+  var view = 'map';
+
+  var EX = {
+    loop: '01 02 51 00 00',
+    cond: '5A 00 05 01 02 03 04 50',
+    f0:   'F0 21 01 5A 00 04 50'
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function el(name, attrs) {
+    var e = document.createElementNS(NS, name);
+    if (attrs) for (var k in attrs) if (attrs.hasOwnProperty(k)) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function parseCodes(text) {
+    var out = [], bad = [];
+    var toks = String(text || '').split(/[\s,;]+/);
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i];
+      if (!t) continue;
+      if (!/^[0-9A-Fa-f]+$/.test(t)) { bad.push(t); continue; }
+      var s = (t.length % 2) ? '0' + t : t;
+      for (var j = 0; j < s.length; j += 2) out.push(parseInt(s.substr(j, 2), 16));
+    }
+    return { cells: out, bad: bad };
+  }
+
+  function pad2(n) {
+    n = Number(n) | 0;
+    return n < 0 ? '??' : (n < 10 ? '0' + n : String(n));
+  }
+
+  function rowIndexByAddr(A) {
+    var m = {};
+    for (var i = 0; i < A.rows.length; i++) m[A.rows[i].addr] = i;
+    return m;
+  }
+
+  function jumpByAddr(A) {
+    var m = {};
+    for (var i = 0; i < A.jumps.length; i++) m[A.jumps[i].addr] = A.jumps[i];
+    return m;
+  }
+
+  /* Блок «проваливается» в следующий, если последняя команда —
+     не безусловный переход и не конец программы. */
+  function fallsThrough(A, b, isLast, jm) {
+    if (isLast) return false;
+    var last = A.rows[b.toIndex];
+    if (!last || last.kind !== 'jump') return true;
+    var j = jm[last.addr];
+    if (!j) return true;
+    return j.kind !== 'jump';
+  }
+
+  /* ---------- вид 1: загогулина ---------- */
+
+  function drawMap(A) {
+    var BW = 190, X0 = 16, PAD = 12, RH = 20, GAP = 34;
+    var bl = A.blocks, i, q;
+    var ys = [], hs = [];
+    var y = 12;
+
+    for (i = 0; i < bl.length; i++) {
+      var n = bl[i].toIndex - bl[i].fromIndex + 1;
+      hs.push(PAD * 2 + RH * n);
+      ys.push(y);
+      y += hs[i] + GAP;
+    }
+
+    var lanes = Math.max(1, A.edges.length);
+    var W = Math.max(320, X0 + BW + 34 + lanes * 16);
+    var H = y - GAP + 30;
+
+    var svg = el('svg', {
+      viewBox: '0 0 ' + W + ' ' + H,
+      class: 'map',
+      preserveAspectRatio: 'xMinYMin meet'
+    });
+
+    var defs = el('defs');
+    defs.innerHTML =
+      '<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">' +
+        '<path d="M0,0 L10,5 L0,10 z" fill="#2f6fed"/></marker>' +
+      '<marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">' +
+        '<path d="M0,0 L10,5 L0,10 z" fill="#d97a10"/></marker>';
+    svg.appendChild(defs);
+
+    /* прямоугольники с командами */
+    for (i = 0; i < bl.length; i++) {
+      var b = bl[i];
+      svg.appendChild(el('rect', {
+        x: X0, y: ys[i], width: BW, height: hs[i], rx: 9,
+        fill: 'rgba(47,111,237,.07)', stroke: 'rgba(47,111,237,.55)', 'stroke-width': 1.4
+      }));
+
+      for (q = b.fromIndex; q <= b.toIndex; q++) {
+        var r = A.rows[q];
+        var line = pad2(r.addr) + '  ' + (r.text || '·');
+        var t = el('text', {
+          x: X0 + 12,
+          y: ys[i] + PAD + RH * (q - b.fromIndex) + 14,
+          'font-size': 12,
+          'font-family': 'ui-monospace, Menlo, Consolas, monospace',
+          fill: 'currentColor',
+          opacity: r.kind === 'jump' ? 0.95 : 0.8
+        });
+        t.textContent = line;
+        svg.appendChild(t);
+      }
+    }
+
+    var jm = jumpByAddr(A);
+    var ri = rowIndexByAddr(A);
+    var cx = X0 + BW / 2;
+
+    /* прямые стрелки вниз: продолжение подряд */
+    for (i = 0; i < bl.length - 1; i++) {
+      if (!fallsThrough(A, bl[i], i === bl.length - 1, jm)) continue;
+      var y1 = ys[i] + hs[i];
+      var y2 = ys[i + 1];
+      var p = el('path', {
+        d: 'M' + cx + ',' + y1 + ' V' + (y2 - 2),
+        stroke: '#2f6fed', 'stroke-width': 1.5, fill: 'none',
+        'marker-end': 'url(#ah)', opacity: .75
+      });
+      svg.appendChild(p);
+    }
+
+    /* переходы: выходим справа, обходим блоки, приходим в цель */
+    for (i = 0; i < A.edges.length; i++) {
+      var e = A.edges[i];
+      var jr = ri[e.addr];
+      var off = (jr !== undefined ? jr - bl[e.from].fromIndex : 0);
+      var yFrom = ys[e.from] + PAD + RH * off + RH / 2;
+      var yTo = ys[e.to] + 11;
+      var laneX = X0 + BW + 18 + i * 16;
+      var color = e.back ? '#d97a10' : '#2f6fed';
+      var d = 'M' + (X0 + BW) + ',' + yFrom +
+              ' H' + laneX + ' V' + yTo + ' H' + (X0 + BW + 4);
+
+      svg.appendChild(el('path', {
+        d: d, stroke: color, 'stroke-width': 1.5, fill: 'none',
+        'marker-end': e.back ? 'url(#ahb)' : 'url(#ah)',
+        'stroke-linejoin': 'round'
+      }));
+
+      var lbl = el('text', {
+        x: X0 + BW + 6, y: yFrom - 5, 'font-size': 10,
+        fill: color, 'font-family': 'system-ui, sans-serif'
+      });
+      lbl.textContent = e.name + (e.back ? ' ↺' : '');
+      svg.appendChild(lbl);
+    }
+
+    var wrap = document.createElement('div');
+    wrap.appendChild(svg);
+    return wrap;
+  }
+
+  /* ---------- вид 2: списком ---------- */
+
+  function drawList(A) {
+    var wrap = document.createElement('div');
+    wrap.className = 'list';
+    var jm = jumpByAddr(A);
+    var blockOf = {}, i, q;
+
+    for (i = 0; i < A.blocks.length; i++)
+      for (q = A.blocks[i].fromIndex; q <= A.blocks[i].toIndex; q++) blockOf[q] = i;
+
+    var cur = -1;
+    for (i = 0; i < A.rows.length; i++) {
+      var r = A.rows[i];
+
+      if (blockOf[i] !== cur) {
+        cur = blockOf[i];
+        var bh = document.createElement('div');
+        bh.className = 'bhead';
+        var bb = A.blocks[cur];
+        bh.textContent = 'Участок ' + (cur + 1) + ' · адреса ' +
+                         pad2(bb.start) + '–' + pad2(bb.end);
+        wrap.appendChild(bh);
+      }
+
+      var line = document.createElement('div');
+      line.className = 'cmd' + (r.kind === 'jump' ? ' j' : '');
+      var a = document.createElement('span');
+      a.className = 'a';
+      a.textContent = pad2(r.addr);
+      var t = document.createElement('span');
+      t.textContent = r.text || '·';
+      line.appendChild(a);
+      line.appendChild(t);
+      wrap.appendChild(line);
+
+      var j = jm[r.addr];
+      if (j) {
+        var arrow = document.createElement('div');
+        var target = (j.kind === 'indirect')
+          ? 'адрес берётся из регистра'
+          : 'на ' + pad2(j.target);
+        arrow.className = 'jump' + (j.kind !== 'indirect' && j.target <= j.addr ? ' back' : '');
+        arrow.textContent = (j.kind === 'indirect') ? '↳ ' + target
+          : ((j.target <= j.addr ? '↺ назад ' : '↳ вперёд ') + target + ' · ' + j.name);
+        wrap.appendChild(arrow);
+      }
+    }
+    return wrap;
+  }
+
+  /* ---------- общее ---------- */
+
+  function drawAbout(A, bad) {
+    var box = $('about');
+    box.innerHTML = '';
+
+    var sum = document.createElement('div');
+    sum.className = 'note';
+    sum.textContent = 'Программа: ' + A.size + ' яч., участков ' + A.blocks.length +
+                      ', переходов ' + A.edges.length + ', циклов ' + A.loops.length +
+                      ', замечаний ' + A.warnings.length + '.';
+    box.appendChild(sum);
+
+    if (bad && bad.length) {
+      var w0 = document.createElement('div');
+      w0.className = 'warn';
+      w0.textContent = 'Не поняла это и пропустила: ' + bad.join(', ');
+      box.appendChild(w0);
+    }
+
+    for (var i = 0; i < A.warnings.length; i++) {
+      var w = document.createElement('div');
+      w.className = 'warn';
+      w.textContent = pad2(A.warnings[i].addr) + ' — ' + A.warnings[i].text;
+      box.appendChild(w);
+    }
+  }
+
+  function render() {
+    var p = parseCodes($('src').value);
+    var out = $('out');
+    var msg = $('msg');
+    out.innerHTML = '';
+    msg.textContent = '';
+
+    if (!p.cells.length) {
+      out.innerHTML = '<div class="empty">Введи коды — покажу карту.</div>';
+      return;
+    }
+
+    if (!window.MKAnalyze) {
+      msg.innerHTML = '<span class="bad">analyze61.js не подключён — карта недоступна.</span>';
+      return;
+    }
+
+    var A;
+    try {
+      A = window.MKAnalyze.analyze(p.cells);
+    } catch (e) {
+      msg.innerHTML = '<span class="bad">Не разобрала: ' + (e && e.message) + '</span>';
+      return;
+    }
+
+    if (!A.size) {
+      out.innerHTML = '<div class="empty">Все ячейки — пустые шаги (54). Программы нет.</div>';
+      return;
+    }
+
+    out.appendChild(view === 'map' ? drawMap(A) : drawList(A));
+    drawAbout(A, p.bad);
+  }
+
+  function setView(v) {
+    view = v;
+    $('viewMap').className = (v === 'map') ? 'on' : '';
+    $('viewList').className = (v === 'list') ? 'on' : '';
+    render();
+  }
+
+  $('viewMap').addEventListener('click', function () { setView('map'); });
+  $('viewList').addEventListener('click', function () { setView('list'); });
+  $('btnRun').addEventListener('click', render);
+
+  var exBtns = document.querySelectorAll('button[data-ex]');
+  for (var i = 0; i < exBtns.length; i++) {
+    exBtns[i].addEventListener('click', function () {
+      var key = this.getAttribute('data-ex');
+      $('src').value = EX[key] || EX.loop;
+      render();
+    });
+  }
+
+  $('src').addEventListener('input', render);
+
+  render();
+})();
+</script>
+
+</body>
+</html>
