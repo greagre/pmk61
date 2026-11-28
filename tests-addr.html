@@ -7,11 +7,13 @@
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          margin: 0; padding: 12px; background: #f6f7f9; color: #1c1f24; }
-  h1 { font-size: 18px; margin: 4px 0 10px; }
+  h1 { font-size: 18px; margin: 4px 0 8px; }
   .lead { font-size: 13px; color: #5b6270; margin-bottom: 12px; line-height: 1.45; }
   .sum { padding: 10px 12px; border-radius: 10px; font-size: 15px; font-weight: 600;
          margin-bottom: 12px; background: #e7f4ec; color: #1c7a45; }
   .sum.bad { background: #fdeaea; color: #b02b2b; }
+  .grp { font-size: 12px; font-weight: 700; color: #5b6270; text-transform: uppercase;
+         letter-spacing: .04em; margin: 14px 0 6px; }
   .t { background: #fff; border: 1px solid #e2e5ea; border-radius: 10px;
        padding: 9px 11px; margin-bottom: 8px; font-size: 13px; }
   .t.ok { border-left: 4px solid #33b373; }
@@ -37,11 +39,11 @@
 <div id="list"></div>
 
 <div class="foot">
-  Открывать со <code>?v=1</code>, иначе браузер покажет старую версию из кэша.
+  Открывать со <code>?v=2</code>, иначе браузер покажет старую версию из кэша.
 </div>
 
 <script src="core.js?v=14"></script>
-<script src="codes-addr.js?v=1"></script>
+<script src="codes-addr.js?v=3"></script>
 <script>
 (function () {
   'use strict';
@@ -55,8 +57,17 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  function show(n, name, input, got, want, extra) {
+  function group(title) {
+    var g = document.createElement('div');
+    g.className = 'grp';
+    g.textContent = title;
+    out.appendChild(g);
+  }
+
+  function t(n, name, input, want, opts, extra) {
     all++;
+    var r = A.parse(input, opts);
+    var got = A.textOf(r.bytes);
     var pass = got === want;
     if (pass) ok++;
     var d = document.createElement('div');
@@ -72,63 +83,63 @@
     out.appendChild(d);
   }
 
-  function res(text, opts) {
-    return A.parse(text, opts);
-  }
+  group('Журнальный режим: адрес одним числом');
 
-  function t(n, name, input, want, opts, extra) {
-    var r = res(input, opts);
-    show(n, name, input, A.textOf(r.bytes), want, extra);
-  }
+  t(1, 'адрес одним числом: 5D 03 → 5D 00 03', '5D 03', '5D 00 03');
+  t(2, 'адрес больше девяти: 5D 30 → 5D 03 00', '5D 30', '5D 03 00');
+  t(3, 'отрицательный адрес: 5D -3 → 5D 0A 03', '5D -3', '5D 0A 03');
+  t(4, 'адрес с полубайтом: 5D 0A 03 не ломается', '5D 0A 03', '5D 0A 03');
+  t(5, 'главный случай: 5E 03 01 → адрес 03 и команда 01', '5E 03 01', '5E 00 03 01');
+  t(6, 'цикл из журнала: 5E 03 01 02 51 0', '5E 03 01 02 51 0', '5E 00 03 01 02 51 00 00');
+  t(7, 'обычные команды не трогаем', '01 02 03', '01 02 03');
+  t(8, 'F0 21 — не переход, адрес не добавляем', 'F0 21', 'F0 21');
+  t(9, 'переход на адрес 0: 51 0 → 51 00 00', '51 0', '51 00 00');
+  t(10, 'переход без адреса в конце: 5D остаётся один', '5D', '5D');
+  t(11, 'адрес -0 — это A0', '5D -0', '5D 0A 00');
 
-  /* 1–5: адрес одним числом и уже разложенный */
-  t(1, 'адрес одним числом в конце: 5D 03 → 5D 00 03', '5D 03', '5D 00 03');
-  t(2, 'адрес уже разложен: 5D 00 03 не меняется', '5D 00 03', '5D 00 03');
-  t(3, 'адрес больше девяти: 5D 30 → 5D 03 00', '5D 30', '5D 03 00');
-  t(4, 'отрицательный адрес: 5D -3 → 5D 0A 03', '5D -3', '5D 0A 03');
-  t(5, 'полубайт с буквой: 5D 0A 03 не меняется', '5D 0A 03', '5D 0A 03');
+  group('Служебные возвраты');
 
-  /* 6–8: не переходы и переходы с адресом внутри */
-  t(6, 'обычные команды не трогаем', '01 02 03', '01 02 03');
-  t(7, 'безусловный переход с нулями', '51 00 00', '51 00 00');
-  t(8, 'FL0 — тоже переход: 5E 07 → 5E 00 07', '5E 07', '5E 00 07');
-
-  /* 9–10: F0 — двухбайтная, адреса не имеет */
-  t(9, 'F0 21 — не переход, адрес не добавляем', 'F0 21', 'F0 21');
-  t(10, 'переход в журнале: 09. 07 после FL0', '5E 00 07 01', '5E 00 07 01');
-
-  /* 11: неоднозначная запись — разбирается как пара */
-  t(11, 'неоднозначно: 5D 03 01 читается как адрес 31', '5D 03 01', '5D 03 01');
-
-  /* 12: отключение исправления */
-  t(12, 'fixAddr:false — старое поведение, 5D 03 остаётся', '5D 03', '5D 03', { fixAddr: false });
-
-  /* 13: мусор не молчит */
   (function () {
-    var r = res('5D XIIE 01');
-    show(13, 'OCR-мусор попадает в bad, а не съедается молча',
-      '5D XIIE 01',
-      'bad: ' + (r.bad.join(', ') || 'нет'),
-      'bad: XIIE',
-      'байты: ' + A.textOf(r.bytes));
+    all++;
+    var r = A.parse('5D 03 5E 07');
+    var f = r.fixes.map(function (x) { return x.raw + ' → ' + x.to; }).join('; ');
+    var pass = f === '03 → 00 03; 07 → 00 07';
+    if (pass) ok++;
+    var d = document.createElement('div');
+    d.className = 't ' + (pass ? 'ok' : 'no');
+    d.innerHTML = '<div class="n">12</div>' +
+      '<div class="name">все развёрнутые адреса видны в fixes</div>' +
+      '<div class="io">fixes: <b>' + esc(f) + '</b>' +
+      (pass ? '' : '<br>ждали: <b>03 → 00 03; 07 → 00 07</b>') + '</div>' +
+      '<div class="io">байты: ' + A.textOf(r.bytes) + '</div>' +
+      (pass ? '' : '<div class="err">не совпало</div>');
+    out.appendChild(d);
   })();
 
-  /* 14: пустой ввод */
+  (function () {
+    all++;
+    var r = A.parse('5D XIIE 01');
+    var got = r.bad.join(', ');
+    var pass = got === 'XIIE';
+    if (pass) ok++;
+    var d = document.createElement('div');
+    d.className = 't ' + (pass ? 'ok' : 'no');
+    d.innerHTML = '<div class="n">13</div>' +
+      '<div class="name">OCR-мусор попадает в bad, а не съедается молча</div>' +
+      '<div class="io">bad: <b>' + esc(got || 'пусто') + '</b>' +
+      (pass ? '' : '<br>ждали: <b>XIIE</b>') + '</div>' +
+      '<div class="io">байты: ' + A.textOf(r.bytes) + '</div>' +
+      (pass ? '' : '<div class="err">не совпало</div>');
+    out.appendChild(d);
+  })();
+
   t(14, 'пустой ввод — пустой результат', '', '');
 
-  /* 15: развёрнутые адреса перечислены в fixes */
-  (function () {
-    var r = res('5D 03 5E 07');
-    var f = r.fixes.map(function (x) { return x.raw + ' → ' + x.to; }).join('; ');
-    show(15, 'все развёрнутые адреса показаны в fixes',
-      '5D 03 5E 07',
-      f,
-      '03 → 03; 07 → 07',
-      'байты: ' + A.textOf(r.bytes));
-  })();
+  group('Строгий режим: адрес двумя ячейками (fixAddr: false)');
 
-  /* 16: адрес «-0» */
-  t(16, 'адрес -0 — это A0', '5D -0', '5D 0A 00');
+  t(15, '5D 00 03 остаётся как есть', '5D 00 03', '5D 00 03', { fixAddr: false });
+  t(16, '5D 03 без разворота — прежнее поведение', '5D 03', '5D 03', { fixAddr: false });
+  t(17, '5E 03 01 02 не разворачивается', '5E 03 01 02', '5E 03 01 02', { fixAddr: false });
 
   sum.className = 'sum' + (ok === all ? '' : ' bad');
   sum.textContent = ok + ' из ' + all + ' — ' + (ok === all ? 'все проверки прошли' : 'есть ошибки');
