@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Извлечение X1 · pmk61</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#111;color:#ddd}
+  h1{font-size:17px;margin:0 0 4px}
+  p.note{font-size:12px;color:#888;margin:0 0 12px}
+  h2{font-size:14px;margin:16px 0 6px;color:#8fc}
+  table{border-collapse:collapse;width:100%;font-size:12px;font-family:ui-monospace,monospace}
+  th,td{border:1px solid #333;padding:3px 6px;text-align:left;white-space:nowrap}
+  th{background:#1d1d1d;color:#aaa;font-weight:normal}
+  td.num{text-align:right}
+  tr.bad td{color:#f88}
+  tr.good td{color:#8f8}
+  .box{border:1px solid #333;border-radius:8px;padding:8px 10px;margin:10px 0}
+  .big{font-size:13px}
+  code{font-family:ui-monospace,monospace;color:#cfa}
+</style>
+</head>
+<body>
+<h1>Извлечение X1 (F Вx) — подъём стека</h1>
+<p class="note">
+Программа: <code>5</code> · <code>1</code> · <code>+</code> · <code>F Вx</code> · <code>С/П</code><br>
+Сложение даёт X = 6, а прежнее X (единица) копируется в X1.<br>
+По руководству <code>F Вx</code> поднимает стек: 6 уходит в Y, а в X встаёт 1.<br>
+core.js просто меняет X и X1 местами — тогда Y остаётся нулём.
+</p>
+
+<div id="out"></div>
+<div id="arith"></div>
+
+<script src="core.js"></script>
+<script src="x1-fix.js"></script>
+<script>
+var OPTS = {
+  progLen: 105, regCount: 15, nop: 0x54, maxDig: 8,
+  hasK: true, addrHigh: true, addrHighFirst: 100, addrHighLast: 104
+};
+
+/* 00: 5, 01: 1, 02: +, 03: F Вx, 04: С/П */
+function progX1() {
+  var p = new Array(105).fill(0x54);
+  p[0] = 0x05;
+  p[1] = 0x01;
+  p[2] = 0x10;
+  p[3] = 0x0F;
+  p[4] = 0x50;
+  return p;
+}
+
+/* 00: 2, 01: 3, 02: +, 03: С/П — арифметика не должна испортиться */
+function progSum() {
+  var p = new Array(105).fill(0x54);
+  p[0] = 0x02;
+  p[1] = 0x03;
+  p[2] = 0x10;
+  p[3] = 0x50;
+  return p;
+}
+
+function run(factory, prog) {
+  var core = factory(OPTS);
+  core.setProgram(prog);
+  var res = core.run(100);
+  return {
+    x: core.ST.X, y: core.ST.Y, z: core.ST.Z, t: core.ST.T,
+    x1: core.ST.X1, ip: core.ST.ip, steps: res.steps, result: res.result
+  };
+}
+
+function row(title, r, good) {
+  return '<tr class="' + (good ? 'good' : 'bad') + '">' +
+    '<td>' + title + '</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.y + '</td>' +
+    '<td class="num">' + r.z + '</td>' +
+    '<td class="num">' + r.t + '</td>' +
+    '<td class="num">' + r.x1 + '</td>' +
+    '<td>' + (good ? '✔' : '✘') + '</td>' +
+    '</tr>';
+}
+
+var withoutFix = run(MKCore.__origCreate, progX1());
+var withFix = run(MKCore.create, progX1());
+
+var okOld = (withoutFix.x === 1 && withoutFix.y === 0);
+var okNew = (withFix.x === 1 && withFix.y === 6 && withFix.z === 0 && withFix.t === 0);
+
+var h = '';
+h += '<h2>Результат</h2>';
+h += '<table>' +
+  '<tr><th>Прогон</th><th>X</th><th>Y</th><th>Z</th><th>T</th><th>X1</th><th>Вывод</th></tr>' +
+  row('core.js без слоя', withoutFix, okOld) +
+  row('core.js + x1-fix.js', withFix, okNew) +
+  '</table>';
+
+h += '<div class="box big">' +
+  (okNew
+    ? '<b>Слой работает:</b> после <code>F Вx</code> в X встала единица, а прежнее X = 6 поднялось в Y.'
+    : '<b>Слой не сработал:</b> ожидалось X = 1 и Y = 6, получено X = ' + withFix.x +
+      ', Y = ' + withFix.y + ', Z = ' + withFix.z + ', T = ' + withFix.t + '.') +
+  '</div>';
+
+h += '<h2>Что видно в строках</h2>';
+h += '<div class="box">' +
+  '<div>• <b>Без слоя</b>: X = ' + withoutFix.x + ', Y = ' + withoutFix.y +
+  ' — это простой обмен X и X1, подъёма нет.</div>' +
+  '<div>• <b>Со слоем</b>: X = ' + withFix.x + ', Y = ' + withFix.y +
+  ' — прежнее X сохранено в стеке, как на железе.</div>' +
+  '</div>';
+
+document.getElementById('out').innerHTML = h;
+
+/* Контроль: обычное сложение не должно пострадать от слоя. */
+(function () {
+  var r = run(MKCore.create, progSum());
+  var good = (r.x === 5 && r.result === 'stop');
+  document.getElementById('arith').innerHTML =
+    '<h2>Слой не ломает арифметику</h2>' +
+    '<table><tr><th>Прогон</th><th>X</th><th>Шагов</th><th>Итог</th><th>Вывод</th></tr>' +
+    '<tr class="' + (good ? 'good' : 'bad') + '">' +
+    '<td>2 3 + С/П</td>' +
+    '<td class="num">' + r.x + '</td>' +
+    '<td class="num">' + r.steps + '</td>' +
+    '<td>' + r.result + '</td>' +
+    '<td>' + (good ? '✔ 5, как должно' : '✘ ожидалось 5, получено ' + r.x) + '</td>' +
+    '</tr></table>';
+})();
+</script>
+</body>
+</html>
