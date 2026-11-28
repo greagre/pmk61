@@ -25,20 +25,27 @@
   pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace;
         font-size: 12.5px; padding: 12px; border-radius: 10px; background: rgba(128,128,128,.12); margin: 8px 0; }
   .note { font-size: 13px; opacity: .75; }
+  .mode { display: block; font-size: 13.5px; margin: 10px 0 0; padding: 8px 10px;
+          border-radius: 10px; background: rgba(128,128,128,.10); }
+  .mode input { margin-right: 8px; transform: scale(1.15); }
+  .fix { color: #d97a10; }
 </style>
 </head>
 <body>
 
 <h1>Карта программы</h1>
-<div class="sub">analyze61.js v1 — блоки, переходы, циклы. Проверки и разбор своих кодов.</div>
+<div class="sub">analyze61.js v1 + codes-addr.js v3 — блоки, переходы, циклы. Проверки и разбор своих кодов.</div>
 
 <div id="summary" class="sum">Идут проверки…</div>
 <table id="results"><thead><tr><th>Проверка</th><th>Ожидание</th><th>Факт</th><th></th></tr></thead><tbody></tbody></table>
 
 <h2>Разобрать свои коды</h2>
 <div class="note">Вводи коды через пробел: <code>51 00 00</code>. Пустые шаги (54) можно не писать.</div>
-<textarea id="src">01 02 51 00 00</textarea>
+<label class="mode"><input type="checkbox" id="journal" checked>
+  Журнальный адрес: писать переход одним числом — <code>5E 03</code> станет <code>5E 00 03</code></label>
+<textarea id="src">01 02 5E 03 01 02 03</textarea>
 <button id="btn">Разобрать</button>
+<pre id="addrnote" class="note">—</pre>
 
 <h2>Отчёт</h2>
 <pre id="report">—</pre>
@@ -49,6 +56,7 @@
 
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
+<script src="codes-addr.js?v=3"></script>
 <script src="analyze61.js?v=1"></script>
 <script>
 (function () {
@@ -157,36 +165,74 @@
     check('Дальний адрес -3', 'цель 103', 'цель ' + (a.jumps[0] && a.jumps[0].target),
           a.jumps[0] && a.jumps[0].target === 103);
 
+    /* 13–15. Один разборщик кодов на всё приложение */
+    if (!window.MKCodeAddr) {
+      check('Журнальный адрес', '5E 00 03 01 02', 'codes-addr.js не подключён', false);
+      check('Строгий режим', '4 байта как есть', 'codes-addr.js не подключён', false);
+      check('FL0 из журнала', '1 переход, цель 3', 'codes-addr.js не подключён', false);
+    } else {
+      var CA = window.MKCodeAddr;
+
+      var pj = CA.parse('5E 03 01 02', { fixAddr: true });
+      check('Журнальный адрес', '5E 00 03 01 02', CA.textOf(pj.bytes),
+            eq(pj.bytes, [0x5E, 0x00, 0x03, 0x01, 0x02]) && pj.fixes.length === 1);
+
+      var ps = CA.parse('5E 03 01 02', { fixAddr: false });
+      check('Строгий режим', '4 байта как есть', CA.textOf(ps.bytes) + ', развёрнуто ' + ps.fixes.length,
+            eq(ps.bytes, [0x5E, 0x03, 0x01, 0x02]) && ps.fixes.length === 0);
+
+      var aj = A.analyze(pad(CA.parse('5E 03 01 02 03', { fixAddr: true }).bytes));
+      check('FL0 из журнала', '1 переход, цель 3',
+            aj.jumps.length + ' переход(ов), цель ' + (aj.jumps[0] && aj.jumps[0].target),
+            aj.jumps.length === 1 && aj.jumps[0].target === 3);
+    }
+
     document.getElementById('summary').innerHTML =
       (passed === total ? '<span class="ok">' : '<span class="bad">') +
       'Проверок пройдено: ' + passed + ' из ' + total + '</span>';
   }
 
-  /* ----- разбор своих кодов ----- */
-  function parseCodes(text) {
-    var tokens = String(text).replace(/[^0-9A-Fa-f]+/g, ' ').trim().split(/\s+/).filter(Boolean);
-    var out = [];
-    for (var i = 0; i < tokens.length; i++) {
-      var t = tokens[i];
-      if (t.length === 1) t = '0' + t;
-      if (t.length !== 2) throw new Error('Не пара hex: ' + tokens[i]);
-      out.push(parseInt(t, 16));
+  /* ----- разбор своих кодов: единственный разборщик на всё приложение ----- */
+  function isJournal() {
+    return document.getElementById('journal').checked;
+  }
+
+  function decode(text) {
+    if (!window.MKCodeAddr) throw new Error('codes-addr.js не подключён');
+    var res = window.MKCodeAddr.parse(text, { fixAddr: isJournal() });
+    if (!res.bytes.length) throw new Error('Пусто');
+    return res;
+  }
+
+  function notes(res) {
+    var lines = [];
+    lines.push('Режим: ' + (res.mode === 'journal' ? 'журнальный (адрес одним числом)' : 'строгий (адрес двумя ячейками)'));
+    lines.push('Байт получилось: ' + res.bytes.length);
+    if (res.fixes.length) {
+      res.fixes.forEach(function (f) {
+        lines.push('  адрес «' + f.raw + '» развёрнут в ' + f.to + ' (ячейка ' + f.addr + ')');
+      });
+    } else if (res.mode === 'journal') {
+      lines.push('  разворачивать было нечего');
     }
-    return out;
+    if (res.bad.length) lines.push('Не поняла и пропустила: ' + res.bad.join(', '));
+    return lines.join('\n');
   }
 
   document.getElementById('btn').onclick = function () {
     var rep = document.getElementById('report');
     var gr = document.getElementById('graph');
+    var an = document.getElementById('addrnote');
     try {
-      var prog = parseCodes(document.getElementById('src').value);
-      if (!prog.length) throw new Error('Пусто');
-      var a = window.MKAnalyze.analyze(prog);
-      rep.textContent = window.MKAnalyze.report(a) + '\n\nЛистинг:\n' + window.MKDasm.text(prog, { length: a.size });
+      var res = decode(document.getElementById('src').value);
+      an.textContent = notes(res);
+      var a = window.MKAnalyze.analyze(res.bytes);
+      rep.textContent = window.MKAnalyze.report(a) + '\n\nЛистинг:\n' + window.MKDasm.text(res.bytes, { length: a.size });
       gr.textContent = window.MKAnalyze.mermaid(a);
     } catch (e) {
       rep.textContent = 'Ошибка: ' + e.message;
       gr.textContent = '—';
+      an.textContent = '—';
     }
   };
 
