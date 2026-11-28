@@ -24,8 +24,9 @@
                   font-weight: 600; cursor: pointer; }
   .views button.on { background: #2f6fed; border-color: #2f6fed; color: #fff; }
   .hint { font-size: 12px; color: #6b7280; margin: 6px 0 0; line-height: 1.4; }
-  .chk { display: flex; align-items: center; gap: 8px; font-size: 13px;
-         color: #3b4048; margin-top: 9px; }
+  .chk { display: flex; align-items: flex-start; gap: 8px; font-size: 13px;
+         color: #3b4048; margin-top: 9px; line-height: 1.35; }
+  .chk input { margin-top: 2px; }
   .sum { font-size: 13px; font-weight: 600; padding: 8px 10px; border-radius: 9px;
          background: #eef2fb; color: #24468f; margin-bottom: 10px; }
   .msg { font-size: 13px; color: #6b7280; padding: 10px; }
@@ -36,7 +37,6 @@
   .bad { font-size: 12px; padding: 8px 10px; border-radius: 9px; background: #fff5e6;
          color: #8a5a05; margin-bottom: 10px; }
 
-  /* блок-схема */
   svg.map { width: 100%; height: auto; display: block; background: #fbfcfd;
             border: 1px solid #e6e9ee; border-radius: 10px; }
   text.bt { font: 700 11px system-ui, sans-serif; fill: #5b6270; }
@@ -44,7 +44,6 @@
   text.rc { font: 12px ui-monospace, Menlo, monospace; fill: #1c1f24; }
   text.elab { font: 10px system-ui, sans-serif; }
 
-  /* листинг */
   .blk { border: 1px solid #e2e5ea; border-radius: 10px; overflow: hidden;
          margin-bottom: 9px; background: #fff; }
   .bh { font: 700 12px system-ui, sans-serif; color: #5b6270; background: #f2f4f7;
@@ -67,9 +66,9 @@
 
 <h1>Карта программы</h1>
 <div class="lead">
-  Два вида одной и той же программы: <b>блок-схема</b> показывает устройство,
-  <b>листинг</b> — точную запись с адресами. Считать программа всё равно будет
-  в эмуляторе: карта раскрывает идею, а не выполняет её.
+  Два вида одной программы: <b>блок-схема</b> показывает устройство, <b>листинг</b> —
+  точную запись с адресами. Считать всё равно будет эмулятор: карта раскрывает идею,
+  а не выполняет её.
 </div>
 
 <div class="card">
@@ -80,19 +79,20 @@
   <select id="ex">
     <option value="loop">Вечный цикл</option>
     <option value="cond">Ветвление: если ноль — в обход</option>
-    <option value="fl0">Как в журнале: FL0 03 (адрес одним числом)</option>
+    <option value="fl0">Как в журнале: FL0 03 одним числом</option>
   </select>
 
   <label class="chk">
     <input type="checkbox" id="fix" checked>
-    <span>разворачивать адрес перехода (<code>5D 03 → 5D 00 03</code>)</span>
+    <span>как в журнале: адрес перехода — <b>одно</b> число (<code>5E 03</code> → <code>5E 00 03</code>)</span>
   </label>
+  <div class="hint" id="modehint"></div>
 
   <div class="views">
     <button id="vMap" class="on" title="Блок-схема">Схема</button>
     <button id="vList" title="Листинг — список команд">Листинг</button>
   </div>
-  <div class="hint" id="vhint">Блок-схема: видно, как программа устроена и куда ведут переходы.</div>
+  <div class="hint" id="vhint"></div>
 </div>
 
 <div id="out"></div>
@@ -102,12 +102,12 @@
   <div id="mmBox"></div>
 </div>
 
-<div class="foot">Открывать со <code>?v=3</code>, иначе браузер покажет старую версию из кэша.</div>
+<div class="foot">Открывать со <code>?v=4</code>, иначе браузер покажет старую версию из кэша.</div>
 
 <script src="core.js?v=14"></script>
 <script src="disasm61.js?v=8"></script>
 <script src="analyze61.js?v=1"></script>
-<script src="codes-addr.js?v=1"></script>
+<script src="codes-addr.js?v=3"></script>
 <script>
 (function () {
   'use strict';
@@ -120,15 +120,17 @@
   var cb = document.getElementById('fix');
   var out = document.getElementById('out');
   var vhint = document.getElementById('vhint');
+  var modehint = document.getElementById('modehint');
   var bMap = document.getElementById('vMap');
   var bList = document.getElementById('vList');
   var mmBtn = document.getElementById('mmBtn');
   var mmBox = document.getElementById('mmBox');
 
+  /* Примеры записаны «по-журнальному»: адрес перехода — одно число. */
   var EX = {
-    loop: '01 02 51 00 00',
-    cond: '5A 00 06 01 02 03 50',
-    fl0:  '5E 03 01 02 51 00 00'
+    loop: '01 02 51 0',
+    cond: '5A 06 01 02 03 50',
+    fl0:  '5E 03 01 02 51 0'
   };
 
   var view = 'map';
@@ -255,6 +257,10 @@
     var r = A.parse(ta.value, { fixAddr: cb.checked });
     last = null;
 
+    modehint.textContent = cb.checked
+      ? 'Режим «как в журнале»: после перехода читается один адрес. Если нужна запись двумя ячейками — снимите галочку.'
+      : 'Строгий режим: каждый байт отдельно, адрес надо писать двумя ячейками — 5E 00 03.';
+
     var html = '';
 
     if (r.bad.length) {
@@ -263,7 +269,7 @@
     }
 
     if (!r.bytes.length) {
-      out.innerHTML = html + '<div class="msg">Нет кодов — введите байты через пробел, например <code>01 02 51 00 00</code>.</div>';
+      out.innerHTML = html + '<div class="msg">Нет кодов — введите байты через пробел, например <code>01 02 51 0</code>.</div>';
       return;
     }
 
@@ -273,9 +279,7 @@
     if (r.fixes.length) {
       var parts = [];
       for (var i = 0; i < r.fixes.length; i++) {
-        var f = r.fixes[i];
-        parts.push('«' + f.raw + '» → ' +
-          A.hex2(r.bytes[f.addr + 1]) + ' ' + A.hex2(r.bytes[f.addr + 2]));
+        parts.push('«' + r.fixes[i].raw + '» → ' + r.fixes[i].to);
       }
       html += '<div class="fix">Адрес был записан одним числом, развернула в две ячейки: ' +
               esc(parts.join('; ')) + '</div>';
@@ -321,13 +325,12 @@
 
   mmBtn.onclick = function () {
     if (!last) { mmBox.innerHTML = '<div class="msg">Сначала введите программу.</div>'; return; }
-    var t = AN.mermaid(last);
-    mmBox.innerHTML = '<pre class="mm">' + esc(t) + '</pre>' +
+    mmBox.innerHTML = '<pre class="mm">' + esc(AN.mermaid(last)) + '</pre>' +
       '<div class="hint">Скопируйте и вставьте в чат Honer AI — он нарисует граф картинкой.</div>';
   };
 
   ta.value = EX.loop;
-  render();
+  setView('map');
 })();
 </script>
 </body>
