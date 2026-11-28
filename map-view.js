@@ -1,13 +1,21 @@
-/* map-view.js v2 — рисование блок-схемы программы МК-61.
+/* map-view.js v3 — рисование блок-схемы программы МК-61.
    Только картинка. Расчёт (участки, переходы, циклы) берёт из analyze61.js:
    an = { size, rows, blocks, edges, loops, warnings }
    rows[i]   = { addr, len, kind, text }
    blocks[i] = { n, start, end, fromIndex, toIndex }
-   edges[i]  = { from, to, target, name, back }
+   edges[i]  = { from, to, target, name, back, addr }
 
-   Главное отличие от страницы: границы участка считаются по ПОСЛЕДНЕЙ ЗАНЯТОЙ
-   ячейке, а не по адресу последней строки. Поэтому участок с БП на адресе 02
-   подписывается 00–04, а не 00–02. */
+   Границы участка считаются по ПОСЛЕДНЕЙ ЗАНЯТОЙ ячейке, а не по адресу
+   последней строки: участок с БП на адресе 02 подписывается 00–04.
+
+   Что нового в v3:
+   1) подпись на стрелке берётся из ТЕКСТА строки («F x=0»), а не из name —
+      иначе искажённые имена вида «Б∨=0» попадали прямо на схему;
+   2) mermaid собирается тем же layout(), что и картинка, поэтому диапазоны
+      в тексте и в рамках совпадают всегда;
+   3) render() возвращает готовый текст mermaid — странице больше не нужно
+      собирать его отдельным проходом, и он не может отстать от схемы;
+   4) справа оставлен запас под длинную подпись петли. */
 (function (global) {
   'use strict';
 
@@ -17,7 +25,7 @@
   var HEAD_H = 26;   /* заголовок участка */
   var PAD = 10;      /* поле внутри рамки */
   var GAP = 32;      /* промежуток между участками */
-  var LOOP_W = 68;   /* вынос петли вправо */
+  var LOOP_W = 96;   /* вынос петли вправо (с запасом под подпись) */
   var MIN_W = 236;   /* минимальная ширина рамки */
 
   function pad2(v) {
@@ -76,6 +84,39 @@
     return best;
   }
 
+  function rowByAddr(an, addr) {
+    var rows = rowsOf(an);
+    for (var i = 0; i < rows.length; i++) {
+      if (rowAddr(rows[i]) === addr) return rows[i];
+    }
+    return null;
+  }
+
+  /* из «F x=0 → 05» делаем «F x=0» — цель уже нарисована стрелкой */
+  function shortCommand(text) {
+    var t = String(text === undefined || text === null ? '' : text);
+    var i = t.indexOf('\u2192');
+    if (i > 0) t = t.slice(0, i);
+    return t.replace(/\s+/g, ' ').trim();
+  }
+
+  /* Подпись перехода: сначала текст строки-источника, потом name из analyze61.
+     Это главная защита от искажённых имён вроде «Б∨=0». */
+  function edgeLabel(an, e, area) {
+    var r = rowByAddr(an, num(e && e.addr, -1));
+    if (!r && area && area.rows) {
+      for (var i = 0; i < area.rows.length; i++) {
+        if (String(rowText(area.rows[i])).indexOf('\u2192') >= 0) { r = area.rows[i]; break; }
+      }
+    }
+    if (r) {
+      var t = shortCommand(rowText(r));
+      if (t && t !== '\u2014') return t;
+    }
+    var n = String((e && e.name) || '').replace(/\s+/g, ' ').trim();
+    return n || '\u043f\u0435\u0440\u0435\u0445\u043e\u0434';
+  }
+
   function layout(an) {
     var blocks = blocksOf(an);
     var edges = edgesOf(an);
@@ -102,10 +143,11 @@
       var t = num(e.to, NaN);
       if (!areas[f]) continue;
       var back = !!e.back || (f === t);
+      var label = edgeLabel(an, e, areas[f]);
       if (f === t) {
-        areas[f].loops.push({ name: String(e.name || 'назад'), target: num(e.target, areas[f].start) });
+        areas[f].loops.push({ name: label, target: num(e.target, areas[f].start) });
       } else if (areas[t]) {
-        areas[f].outs.push({ name: String(e.name || 'переход'), to: t, back: back });
+        areas[f].outs.push({ name: label, to: t, back: back });
       }
     }
 
@@ -172,16 +214,18 @@
     /* петля назад — справа от рамки */
     for (var L = 0; L < area.loops.length; L++) {
       var ax = x + w;
+      var off = L * 18;
       var ay = y + h - 14;
-      var by = y + 14;
-      var path = 'M' + ax + ',' + ay + ' H' + (ax + LOOP_W) + ' V' + by + ' H' + (ax + 8);
+      var by = y + 14 + off;
+      var loopW = LOOP_W - off;
+      var path = 'M' + ax + ',' + ay + ' H' + (ax + loopW) + ' V' + by + ' H' + (ax + 8);
       g.appendChild(el('path', { d: path, fill: 'none', stroke: opts.loopColor, 'stroke-width': 2 }));
       g.appendChild(el('polygon', {
         points: (ax + 8) + ',' + by + ' ' + (ax + 18) + ',' + (by - 5) + ' ' + (ax + 18) + ',' + (by + 5),
         fill: opts.loopColor
       }));
       g.appendChild(el('text', {
-        x: ax + 6, y: (ay + by) / 2 + 4, 'font-size': 12, fill: opts.loopColor
+        x: ax + 6, y: (ay + by) / 2 + 4, 'font-size': 11, fill: opts.loopColor
       }, '\u21ba ' + area.loops[L].name + ' \u2192 ' + pad2(area.loops[L].target)));
     }
 
@@ -213,7 +257,7 @@
           fill: opts.arrowColor
         }));
         svg.appendChild(el('text', {
-          x: xm + 4, y: (y1 + y2) / 2 + 4, 'font-size': 12, fill: opts.arrowColor
+          x: xm + 4, y: (y1 + y2) / 2 + 4, 'font-size': 11, fill: opts.arrowColor
         }, (down ? '\u2193 ' : '\u2191 ') + out.name));
       }
     }
@@ -232,12 +276,13 @@
     while (container.firstChild) container.removeChild(container.firstChild);
 
     var areas = layout(an);
+    var text = mermaid(an);
     if (!areas.length) {
       var empty = document.createElement('div');
       empty.className = 'msg';
       empty.textContent = 'Участков нет.';
       container.appendChild(empty);
-      return { areas: areas };
+      return { areas: areas, mermaid: text };
     }
 
     var avail = num(opts.width, 0) || (container.clientWidth || 320);
@@ -251,29 +296,34 @@
     }
     drawOuts(svg, areas, opts);
 
-    svg.setAttribute('viewBox', '0 0 ' + (14 + w + LOOP_W + 26) + ' ' + (y - GAP + 14));
+    svg.setAttribute('viewBox', '0 0 ' + (14 + w + LOOP_W + 34) + ' ' + (y - GAP + 14));
     svg.setAttribute('width', '100%');
     svg.style.display = 'block';
     container.appendChild(svg);
-    return { areas: areas };
+    return { areas: areas, mermaid: text };
   }
 
-  /* запасной вариант графа, если analyze61 не умеет mermaid() */
+  /* Текст графа. Собирается из layout(), поэтому диапазоны всегда совпадают
+     с рамками на схеме: 00–02 для F x=0, 05–07 для БП. */
   function mermaid(an) {
     var areas = layout(an);
     var lines = ['graph TD'];
-    for (var i = 0; i < areas.length; i++) {
+    if (!areas.length) return lines.join('\n');
+    var i, k;
+    for (i = 0; i < areas.length; i++) {
       var a = areas[i];
       var parts = [];
-      for (var k = 0; k < a.rows.length; k++) parts.push(rowText(a.rows[k]));
+      for (k = 0; k < a.rows.length; k++) parts.push(shortCommand(rowText(a.rows[k])));
       var cap = pad2(a.start) + '\u2013' + pad2(a.end) + ': ' + (parts.join(', ') || '\u2014');
-      if (cap.length > 46) cap = cap.slice(0, 45) + '\u2026';
+      if (cap.length > 52) cap = cap.slice(0, 51) + '\u2026';
       lines.push('  B' + i + '["' + cap.replace(/"/g, '') + '"]');
     }
-    for (var j = 0; j < areas.length; j++) {
-      for (var q = 0; q < areas[j].loops.length; q++) lines.push('  B' + j + ' -->|\u043d\u0430\u0437\u0430\u0434| B' + j);
-      for (var o = 0; o < areas[j].outs.length; o++) {
-        lines.push('  B' + j + ' -->|' + areas[j].outs[o].name.replace(/"/g, '') + '| B' + areas[j].outs[o].to);
+    for (i = 0; i < areas.length; i++) {
+      for (k = 0; k < areas[i].loops.length; k++) {
+        lines.push('  B' + i + ' -->|\u043d\u0430\u0437\u0430\u0434| B' + i);
+      }
+      for (k = 0; k < areas[i].outs.length; k++) {
+        lines.push('  B' + i + ' -->|' + areas[i].outs[k].name.replace(/"/g, '') + '| B' + areas[i].outs[k].to);
       }
     }
     return lines.join('\n');
@@ -283,7 +333,9 @@
     render: render,
     layout: layout,
     mermaid: mermaid,
+    edgeLabel: edgeLabel,
+    shortCommand: shortCommand,
     lastCell: lastCell,
-    version: 2
+    version: 3
   };
 })(typeof window !== 'undefined' ? window : this);
